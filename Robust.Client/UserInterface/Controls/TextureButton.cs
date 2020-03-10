@@ -6,15 +6,11 @@ using Robust.Shared.ViewVariables;
 
 namespace Robust.Client.UserInterface.Controls
 {
-    public class TextureButton : BaseButton
+    public class TextureButton : ContainerButton
     {
         private Vector2 _scale = (1, 1);
         private Texture _textureNormal;
         public const string StylePropertyTexture = "texture";
-        public const string StylePseudoClassNormal = "normal";
-        public const string StylePseudoClassHover = "hover";
-        public const string StylePseudoClassDisabled = "disabled";
-        public const string StylePseudoClassPressed = "pressed";
 
         public TextureButton()
         {
@@ -42,29 +38,10 @@ namespace Robust.Client.UserInterface.Controls
             }
         }
 
-        protected override void DrawModeChanged()
-        {
-            switch (DrawMode)
-            {
-                case DrawModeEnum.Normal:
-                    SetOnlyStylePseudoClass(StylePseudoClassNormal);
-                    break;
-                case DrawModeEnum.Pressed:
-                    SetOnlyStylePseudoClass(StylePseudoClassPressed);
-                    break;
-                case DrawModeEnum.Hover:
-                    SetOnlyStylePseudoClass(StylePseudoClassHover);
-                    break;
-                case DrawModeEnum.Disabled:
-                    SetOnlyStylePseudoClass(StylePseudoClassDisabled);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
-        }
-
         protected internal override void Draw(DrawingHandleScreen handle)
         {
+            base.Draw(handle);
+
             var texture = TextureNormal;
 
             if (texture == null)
@@ -88,7 +65,13 @@ namespace Robust.Client.UserInterface.Controls
                 TryGetStyleProperty(StylePropertyTexture, out texture);
             }
 
-            return Scale * (texture?.Size ?? Vector2.Zero);
+            var min = Scale * (texture?.Size ?? Vector2.Zero);
+            foreach (var child in Children)
+            {
+                min = Vector2.ComponentMax(min, child.CombinedMinimumSize);
+            }
+
+            return min + ActualStyleBox.MinimumSize / UIScale;
         }
     }
 }

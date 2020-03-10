@@ -18,7 +18,7 @@ namespace Robust.Client.UserInterface.Controls
             DrawModeChanged();
         }
 
-        private StyleBox ActualStyleBox
+        protected StyleBox ActualStyleBox
         {
             get
             {
