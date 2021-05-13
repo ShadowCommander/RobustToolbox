@@ -1,10 +1,8 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.IO;
+﻿using System.IO;
+using System.Threading;
 using Robust.Client.Graphics;
-using Robust.Client.Interfaces.Graphics;
-using Robust.Client.Interfaces.ResourceManagement;
 using Robust.Shared.IoC;
-using Robust.Shared.Log;
+using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -12,58 +10,108 @@ using YamlDotNet.RepresentationModel;
 
 namespace Robust.Client.ResourceManagement
 {
-    public class TextureResource : BaseResource
+    public sealed class TextureResource : BaseResource
     {
-        public const float ClickThreshold = 0.25f;
+        private OwnedTexture _texture = default!;
+        public override ResourcePath Fallback => new("/Textures/noSprite.png");
 
-        public override ResourcePath? Fallback => new ResourcePath("/Textures/noSprite.png");
-        public Texture Texture { get; private set; } = default!;
+        public Texture Texture => _texture;
 
         public override void Load(IResourceCache cache, ResourcePath path)
         {
-            if (!cache.TryContentFileRead(path, out var stream))
+            var clyde = IoCManager.Resolve<IClyde>();
+
+            var data = new LoadStepData {Path = path};
+
+            LoadPreTexture(cache, data);
+            LoadTexture(clyde, data);
+            LoadFinish(cache, data);
+        }
+
+        internal static void LoadPreTexture(IResourceCache cache, LoadStepData data)
+        {
+            using (var stream = cache.ContentFileRead(data.Path))
             {
-                throw new FileNotFoundException("Content file does not exist for texture");
+                data.Image = Image.Load<Rgba32>(stream);
             }
 
-            // Primarily for tracking down iCCP sRGB errors in the image files.
-            Logger.DebugS("res.tex", $"Loading texture {path}.");
+            data.LoadParameters = TryLoadTextureParameters(cache, data.Path) ?? TextureLoadParameters.Default;
+        }
 
-            var loadParameters = _tryLoadTextureParameters(cache, path) ?? TextureLoadParameters.Default;
+        internal static void LoadTexture(IClyde clyde, LoadStepData data)
+        {
+            data.Texture = clyde.LoadTextureFromImage(data.Image, data.Path.ToString(), data.LoadParameters);
+        }
 
-            var manager = IoCManager.Resolve<IClyde>();
-
-            using var image = Image.Load<Rgba32>(stream);
-
-            Texture = manager.LoadTextureFromImage(image, path.ToString(), loadParameters);
+        internal void LoadFinish(IResourceCache cache, LoadStepData data)
+        {
+            _texture = data.Texture;
 
             if (cache is IResourceCacheInternal cacheInternal)
             {
-                cacheInternal.TextureLoaded(new TextureLoadedEventArgs(path, image, this));
+                cacheInternal.TextureLoaded(new TextureLoadedEventArgs(data.Path, data.Image, this));
             }
+
+            data.Image.Dispose();
         }
 
-        private static TextureLoadParameters? _tryLoadTextureParameters(IResourceCache cache, ResourcePath path)
+        private static TextureLoadParameters? TryLoadTextureParameters(IResourceCache cache, ResourcePath path)
         {
             var metaPath = path.WithName(path.Filename + ".yml");
             if (cache.TryContentFileRead(metaPath, out var stream))
             {
-                YamlDocument yamlData;
-                using (var reader = new StreamReader(stream, EncodingHelpers.UTF8))
+                using (stream)
                 {
-                    var yamlStream = new YamlStream();
-                    yamlStream.Load(reader);
-                    if (yamlStream.Documents.Count == 0)
+                    YamlDocument yamlData;
+                    using (var reader = new StreamReader(stream, EncodingHelpers.UTF8))
                     {
-                        return null;
+                        var yamlStream = new YamlStream();
+                        yamlStream.Load(reader);
+                        if (yamlStream.Documents.Count == 0)
+                        {
+                            return null;
+                        }
+
+                        yamlData = yamlStream.Documents[0];
                     }
 
-                    yamlData = yamlStream.Documents[0];
+                    return TextureLoadParameters.FromYaml((YamlMappingNode) yamlData.RootNode);
                 }
-
-                return TextureLoadParameters.FromYaml((YamlMappingNode)yamlData.RootNode);
             }
+
             return null;
+        }
+
+        public override void Reload(IResourceCache cache, ResourcePath path, CancellationToken ct = default)
+        {
+            var clyde = IoCManager.Resolve<IClyde>();
+
+            var data = new LoadStepData {Path = path};
+            LoadPreTexture(cache, data);
+
+            if (data.Image.Width == Texture.Width && data.Image.Height == Texture.Height)
+            {
+                // Dimensions match, rewrite texture in place.
+                _texture.SetSubImage(Vector2i.Zero, data.Image);
+            }
+            else
+            {
+                // Dimensions do not match, make new texture.
+                _texture.Dispose();
+                LoadTexture(clyde, data);
+                _texture = data.Texture;
+            }
+
+            data.Image.Dispose();
+        }
+
+        internal sealed class LoadStepData
+        {
+            public ResourcePath Path = default!;
+            public Image<Rgba32> Image = default!;
+            public TextureLoadParameters LoadParameters;
+            public OwnedTexture Texture = default!;
+            public bool Bad;
         }
 
         // TODO: Due to a bug in Roslyn, NotNullIfNotNullAttribute doesn't work.

@@ -1,12 +1,13 @@
 ﻿namespace Robust.Shared.Enums
 {
-    public enum PlacementManagerMessage
+    public enum PlacementManagerMessage : byte
     {
         StartPlacement,
         CancelPlacement,
         PlacementFailed,
         RequestPlacement,
         RequestEntRemove,
+        RequestRectRemove,
     }
 
     public enum SessionStatus : byte
@@ -18,7 +19,7 @@
         Disconnected
     }
 
-    public enum NetworkDataType
+    public enum NetworkDataType: byte
     {
         d_enum,
         d_bool,

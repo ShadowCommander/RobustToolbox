@@ -1,7 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using Robust.Shared.Interfaces.GameObjects;
+using JetBrains.Annotations;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization;
 
 #nullable disable
@@ -60,7 +61,8 @@ namespace Robust.Shared.ViewVariables
         /// <summary>
         ///     A list of VV-accessible the remote object has.
         /// </summary>
-        public List<MemberData> Members { get; set; } = new List<MemberData>();
+        public List<(string groupName, List<MemberData> groupMembers)> MemberGroups { get; set; }
+            = new();
 
         /// <summary>
         ///     Token used to indicate "this is a reference, but I can't send the actual reference over".
@@ -77,6 +79,30 @@ namespace Robust.Shared.ViewVariables
             public override string ToString()
             {
                 return Stringified;
+            }
+        }
+
+        /// <summary>
+        ///     Token used to indicate "this is a prototype reference, but I can't send the actual reference over".
+        /// </summary>
+        [Serializable, NetSerializable]
+        public class PrototypeReferenceToken : ReferenceToken
+        {
+            /// <summary>
+            ///     The ID of the prototype.
+            /// </summary>
+            [CanBeNull]
+            public string ID { get; set; }
+
+            /// <summary>
+            ///     The Prototype Variant identifier.
+            /// </summary>
+            public string Variant { get; set; }
+
+            // ToString override so EditorDummy displays it correctly.
+            public override string ToString()
+            {
+                return $"{Stringified} Prototype: {Variant} ID: {ID}";
             }
         }
 
@@ -147,12 +173,12 @@ namespace Robust.Shared.ViewVariables
 
     /// <summary>
     ///     Contains the type names of the components of a remote <see cref="IEntity"/>.
-    ///     Requested by <see cref="ViewVariablesBlobEntityComponents"/>.
+    ///     Requested by <see cref="ViewVariablesRequestEntityComponents"/>.
     /// </summary>
     [Serializable, NetSerializable]
     public class ViewVariablesBlobEntityComponents : ViewVariablesBlob
     {
-        public List<Entry> ComponentTypes { get; set; } = new List<Entry>();
+        public List<Entry> ComponentTypes { get; set; } = new();
 
         // This might as well be a ValueTuple but I couldn't get that to work.
         [Serializable, NetSerializable]
@@ -167,7 +193,29 @@ namespace Robust.Shared.ViewVariables
 
             public string FullName { get; set; }
             public string Stringified { get; set; }
+            public string ComponentName { get; set; }
         }
+    }
+
+    /// <summary>
+    ///     Contains a list of server-side component that can be added to a remote <see cref="IEntity"/>.
+    ///     Requested by <see cref="ViewVariablesRequestAllValidComponents"/>.
+    /// </summary>
+    [Serializable, NetSerializable]
+    public class ViewVariablesBlobAllValidComponents : ViewVariablesBlob
+    {
+        public List<string> ComponentTypes { get; set; } = new();
+    }
+
+    /// <summary>
+    ///     Contains a list of all server-side prototypes of a variant.
+    ///     Requested by <see cref="ViewVariablesRequestAllPrototypes"/>.
+    /// </summary>
+    [Serializable, NetSerializable]
+    public class ViewVariablesBlobAllPrototypes : ViewVariablesBlob
+    {
+        public List<string> Prototypes { get; set; } = new();
+        public string Variant { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -216,6 +264,28 @@ namespace Robust.Shared.ViewVariables
     public class ViewVariablesRequestEntityComponents : ViewVariablesRequest
     {
 
+    }
+
+    /// <summary>
+    ///     Requests the server to send us a <see cref="ViewVariablesBlobAllValidComponents"/>.
+    /// </summary>
+    [Serializable, NetSerializable]
+    public class ViewVariablesRequestAllValidComponents : ViewVariablesRequest
+    {
+    }
+
+    /// <summary>
+    ///     Requests the server to send us a <see cref="ViewVariablesBlobAllPrototypes"/>.
+    /// </summary>
+    [Serializable, NetSerializable]
+    public class ViewVariablesRequestAllPrototypes : ViewVariablesRequest
+    {
+        public string Variant { get; }
+
+        public ViewVariablesRequestAllPrototypes(string variant)
+        {
+            Variant = variant;
+        }
     }
 
     /// <summary>

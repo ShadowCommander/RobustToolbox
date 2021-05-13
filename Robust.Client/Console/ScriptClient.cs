@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using Robust.Shared.Interfaces.Network;
 using Robust.Shared.IoC;
+using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
 
 namespace Robust.Client.Console
@@ -11,7 +11,7 @@ namespace Robust.Client.Console
         [Dependency] private readonly IClientConGroupController _conGroupController = default!;
         [Dependency] private readonly IClientNetManager _netManager = default!;
 
-        private readonly Dictionary<int, ScriptConsoleServer> _activeConsoles = new Dictionary<int,ScriptConsoleServer>();
+        private readonly Dictionary<int, ScriptConsoleServer> _activeConsoles = new();
 
         private int _nextSessionId = 1;
 

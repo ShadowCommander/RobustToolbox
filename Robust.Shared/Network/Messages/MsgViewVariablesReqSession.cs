@@ -1,12 +1,7 @@
-using System;
 using System.IO;
 using Lidgren.Network;
-using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Serialization;
 using Robust.Shared.IoC;
 using Robust.Shared.Serialization;
-using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
 #nullable disable
@@ -43,7 +38,7 @@ namespace Robust.Shared.Network.Messages
             RequestId = buffer.ReadUInt32();
             var serializer = IoCManager.Resolve<IRobustSerializer>();
             var length = buffer.ReadInt32();
-            using var stream = buffer.ReadAsStream(length);
+            using var stream = buffer.ReadAlignedMemory(length);
             Selector = serializer.Deserialize<ViewVariablesObjectSelector>(stream);
         }
 

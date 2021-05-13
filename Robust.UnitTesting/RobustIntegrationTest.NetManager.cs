@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Net;
 using System.Threading.Channels;
-using Robust.Shared.Interfaces.Network;
+using System.Threading.Tasks;
+using Robust.Shared.IoC;
 using Robust.Shared.Network;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
 namespace Robust.UnitTesting
@@ -13,6 +16,7 @@ namespace Robust.UnitTesting
     {
         internal sealed class IntegrationNetManager : IClientNetManager, IServerNetManager
         {
+            [Dependency] private readonly IGameTiming _gameTiming = default!;
             public bool IsServer { get; private set; }
             public bool IsClient => !IsServer;
             public bool IsRunning { get; private set; }
@@ -22,7 +26,7 @@ namespace Robust.UnitTesting
             public int ChannelCount => _channels.Count;
 
             private readonly Dictionary<int, IntegrationNetChannel> _channels =
-                new Dictionary<int, IntegrationNetChannel>();
+                new();
 
             private readonly Channel<object> _messageChannel;
 
@@ -36,8 +40,8 @@ namespace Robust.UnitTesting
             public int Port => default;
             public IReadOnlyDictionary<Type, long> MessageBandwidthUsage { get; } = new Dictionary<Type, long>();
 
-            private readonly Dictionary<Type, ProcessMessage> _callbacks = new Dictionary<Type, ProcessMessage>();
-            private readonly HashSet<Type> _registeredMessages = new HashSet<Type>();
+            private readonly Dictionary<Type, ProcessMessage> _callbacks = new();
+            private readonly HashSet<Type> _registeredMessages = new();
 
             /// <summary>
             ///     The channel we will connect to when <see cref="ClientConnect"/> is called.
@@ -97,24 +101,41 @@ namespace Robust.UnitTesting
                         {
                             DebugTools.Assert(IsServer);
 
-                            var writer = connect.ChannelWriter;
-
-                            var uid = _genConnectionUid();
-                            var sessionId = new NetSessionId($"integration_{uid}");
-
-                            var connectArgs =
-                                new NetConnectingArgs(sessionId, new IPEndPoint(IPAddress.IPv6Loopback, 0));
-                            Connecting?.Invoke(this, connectArgs);
-                            if (connectArgs.Deny)
+                            async void DoConnect()
                             {
-                                writer.TryWrite(new DeniedConnectMessage());
-                                continue;
+                                var writer = connect.ChannelWriter;
+
+                                var uid = _genConnectionUid();
+                                var sessionId = new NetUserId(Guid.NewGuid());
+                                var userName = $"integration_{uid}";
+                                var userData = new NetUserData(sessionId, userName)
+                                {
+                                    HWId = ImmutableArray<byte>.Empty
+                                };
+
+                                var args = await OnConnecting(
+                                    new IPEndPoint(IPAddress.IPv6Loopback, 0),
+                                    userData,
+                                    LoginType.GuestAssigned);
+                                if (args.IsDenied)
+                                {
+                                    writer.TryWrite(new DeniedConnectMessage());
+                                    return;
+                                }
+
+                                writer.TryWrite(new ConfirmConnectMessage(uid, userData));
+                                var channel = new IntegrationNetChannel(
+                                    this,
+                                    connect.ChannelWriter,
+                                    uid,
+                                    userData,
+                                    connect.Uid);
+                                _channels.Add(uid, channel);
+                                Connected?.Invoke(this, new NetChannelArgs(channel));
                             }
 
-                            writer.TryWrite(new ConfirmConnectMessage(uid, sessionId));
-                            var channel = new IntegrationNetChannel(this, connect.ChannelWriter, uid, sessionId, connect.Uid);
-                            _channels.Add(uid, channel);
-                            Connected?.Invoke(this, new NetChannelArgs(channel));
+                            DoConnect();
+
                             break;
                         }
 
@@ -157,6 +178,7 @@ namespace Robust.UnitTesting
                                     Disconnect?.Invoke(this, new NetDisconnectedArgs(channel, string.Empty));
 
                                     _channels.Remove(disconnect.Connection);
+                                    channel.IsConnected = false;
                                 }
                             }
                             else
@@ -179,8 +201,12 @@ namespace Robust.UnitTesting
                         {
                             DebugTools.Assert(IsClient);
 
-                            var channel = new IntegrationNetChannel(this, NextConnectChannel!, _clientConnectingUid,
-                                confirm.SessionId, confirm.AssignedUid);
+                            var channel = new IntegrationNetChannel(
+                                this,
+                                NextConnectChannel!,
+                                _clientConnectingUid,
+                                confirm.UserData,
+                                confirm.AssignedUid);
 
                             _channels.Add(channel.ConnectionUid, channel);
 
@@ -192,6 +218,17 @@ namespace Robust.UnitTesting
                             throw new ArgumentOutOfRangeException();
                     }
                 }
+            }
+
+            private async Task<NetConnectingArgs> OnConnecting(IPEndPoint ip, NetUserData userData, LoginType loginType)
+            {
+                var args = new NetConnectingArgs(userData, ip, loginType);
+                foreach (var conn in _connectingEvent)
+                {
+                    await conn(args);
+                }
+
+                return args;
             }
 
             public void ServerSendToAll(NetMessage message)
@@ -222,14 +259,26 @@ namespace Robust.UnitTesting
                 }
             }
 
-            public event EventHandler<NetConnectingArgs>? Connecting;
+
+            private readonly List<Func<NetConnectingArgs, Task>> _connectingEvent
+                = new();
+
+            public event Func<NetConnectingArgs, Task> Connecting
+            {
+                add => _connectingEvent.Add(value);
+                remove => _connectingEvent.Remove(value);
+            }
+
             public event EventHandler<NetChannelArgs>? Connected;
             public event EventHandler<NetDisconnectedArgs>? Disconnect;
 
-            public void RegisterNetMessage<T>(string name, ProcessMessage<T>? rxCallback = null) where T : NetMessage
+            public void RegisterNetMessage<T>(string name, ProcessMessage<T>? rxCallback = null,
+                NetMessageAccept accept = NetMessageAccept.Both) where T : NetMessage
             {
+                var thisSide = IsServer ? NetMessageAccept.Server : NetMessageAccept.Client;
+
                 _registeredMessages.Add(typeof(T));
-                if (rxCallback != null)
+                if (rxCallback != null && (accept & thisSide) != 0)
                     _callbacks.Add(typeof(T), msg => rxCallback((T) msg));
             }
 
@@ -243,20 +292,26 @@ namespace Robust.UnitTesting
                 return (T) Activator.CreateInstance(typeof(T), (INetChannel?) null)!;
             }
 
+            public byte[]? RsaPublicKey => null;
+            public AuthMode Auth => AuthMode.Disabled;
+            public Func<string, Task<NetUserId?>>? AssignUserIdCallback { get; set; }
+            public IServerNetManager.NetApprovalDelegate? HandleApprovalCallback { get; set; }
+
             public void DisconnectChannel(INetChannel channel, string reason)
             {
                 channel.Disconnect(reason);
             }
 
-            INetChannel IClientNetManager.ServerChannel => ServerChannel;
+            INetChannel? IClientNetManager.ServerChannel => ServerChannel;
             public ClientConnectionState ClientConnectState => ClientConnectionState.NotConnecting;
+
             public event Action<ClientConnectionState>? ClientConnectStateChanged
             {
                 add { }
                 remove { }
             }
 
-            private IntegrationNetChannel ServerChannel
+            private IntegrationNetChannel? ServerChannel
             {
                 get
                 {
@@ -285,6 +340,11 @@ namespace Robust.UnitTesting
             public void ClientDisconnect(string reason)
             {
                 DebugTools.Assert(IsClient);
+                if (ServerChannel == null)
+                {
+                    return;
+                }
+
                 Disconnect?.Invoke(this, new NetDisconnectedArgs(ServerChannel, reason));
                 Shutdown(reason);
             }
@@ -315,27 +375,39 @@ namespace Robust.UnitTesting
                 public int ConnectionUid { get; }
                 long INetChannel.ConnectionId => ConnectionUid;
 
-                public bool IsConnected { get; }
+                public bool IsConnected { get; set; }
+                public NetUserData UserData { get; }
 
                 // TODO: Should this port value make sense?
-                public IPEndPoint RemoteEndPoint { get; } = new IPEndPoint(IPAddress.Loopback, 1212);
-                public NetSessionId SessionId { get; }
+                public IPEndPoint RemoteEndPoint { get; } = new(IPAddress.Loopback, 1212);
+                public NetUserId UserId => UserData.UserId;
+                public string UserName => UserData.UserName;
+                public LoginType AuthType => LoginType.GuestAssigned;
+                public TimeSpan RemoteTimeOffset => TimeSpan.Zero; // TODO: Fix this
+                public TimeSpan RemoteTime => _owner._gameTiming.RealTime + RemoteTimeOffset;
                 public short Ping => default;
 
-                public IntegrationNetChannel(IntegrationNetManager owner, ChannelWriter<object> otherChannel, int uid,
-                    NetSessionId sessionId)
+                public IntegrationNetChannel(
+                    IntegrationNetManager owner,
+                    ChannelWriter<object> otherChannel,
+                    int uid,
+                    NetUserData userData)
                 {
                     _owner = owner;
                     ConnectionUid = uid;
-                    SessionId = sessionId;
+                    UserData = userData;
                     OtherChannel = otherChannel;
                     IsConnected = true;
                 }
 
-                public IntegrationNetChannel(IntegrationNetManager owner, ChannelWriter<object> otherChannel, int uid,
-                    NetSessionId sessionId, int remoteUid) : this(owner, otherChannel, uid, sessionId)
+                public IntegrationNetChannel(
+                    IntegrationNetManager owner,
+                    ChannelWriter<object> otherChannel,
+                    int uid,
+                    NetUserData userData,
+                    int remoteUid) : this(owner, otherChannel, uid, userData)
                 {
-                    RemoteUid = uid;
+                    RemoteUid = remoteUid;
                 }
 
                 public T CreateNetMessage<T>() where T : NetMessage
@@ -351,6 +423,8 @@ namespace Robust.UnitTesting
                 public void Disconnect(string reason)
                 {
                     OtherChannel.TryWrite(new DisconnectMessage(RemoteUid));
+
+                    IsConnected = false;
                 }
             }
 
@@ -368,14 +442,14 @@ namespace Robust.UnitTesting
 
             private sealed class ConfirmConnectMessage
             {
-                public ConfirmConnectMessage(int assignedUid, NetSessionId sessionId)
+                public ConfirmConnectMessage(int assignedUid, NetUserData userData)
                 {
                     AssignedUid = assignedUid;
-                    SessionId = sessionId;
+                    UserData = userData;
                 }
 
                 public int AssignedUid { get; }
-                public NetSessionId SessionId { get; }
+                public NetUserData UserData { get; }
             }
 
             private sealed class DeniedConnectMessage

@@ -16,7 +16,7 @@ namespace Robust.Shared.Utility
     [Serializable, NetSerializable]
     public sealed partial class FormattedMessage
     {
-        public TagList Tags => new TagList(_tags);
+        public TagList Tags => new(_tags);
         private readonly List<Tag> _tags;
 
         public FormattedMessage()
@@ -36,12 +36,27 @@ namespace Robust.Shared.Utility
             return msg;
         }
 
+        public static FormattedMessage FromMarkupPermissive(string markup)
+        {
+            var msg = new FormattedMessage();
+            msg.AddMarkupPermissive(markup);
+            return msg;
+        }
+
         /// <summary>
         ///     Escape a string of text to be able to be formatted into markup.
         /// </summary>
         public static string EscapeText(string text)
         {
             return text.Replace("\\", "\\\\").Replace("[", "\\[");
+        }
+
+        /// <summary>
+        ///     Remove all markup, leaving only the basic text content behind.
+        /// </summary>
+        public static string RemoveMarkup(string text)
+        {
+            return FromMarkup(text).ToString();
         }
 
         /// <summary>
@@ -95,36 +110,24 @@ namespace Robust.Shared.Utility
         }
 
         [Serializable, NetSerializable]
-        public abstract class Tag
+        public abstract record Tag
         {
         }
 
         [Serializable, NetSerializable]
-        public class TagText : Tag
+        public sealed record TagText(string Text) : Tag
         {
-            public readonly string Text;
-
-            public TagText(string text)
-            {
-                Text = text;
-            }
         }
 
         [Serializable, NetSerializable]
-        public class TagColor : Tag
+        public sealed record TagColor(Color Color) : Tag
         {
-            public readonly Color Color;
-
-            public TagColor(Color color)
-            {
-                Color = color;
-            }
         }
 
         [Serializable, NetSerializable]
-        public class TagPop : Tag
+        public sealed record TagPop : Tag
         {
-            public static readonly TagPop Instance = new TagPop();
+            public static readonly TagPop Instance = new();
         }
 
         public readonly struct TagList : IReadOnlyList<Tag>

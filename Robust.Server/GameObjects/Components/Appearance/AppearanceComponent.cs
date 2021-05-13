@@ -1,23 +1,31 @@
 ﻿using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Components.Appearance;
+using Robust.Shared.ViewVariables;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using Robust.Shared.Players;
 
 namespace Robust.Server.GameObjects
 {
     public sealed class AppearanceComponent : SharedAppearanceComponent
     {
-        readonly Dictionary<object, object> data = new Dictionary<object, object>();
+        [ViewVariables]
+        readonly Dictionary<object, object> data = new();
 
         public override void SetData(string key, object value)
         {
+            if (data.TryGetValue(key, out var existing) && existing.Equals(value))
+                return;
+
             data[key] = value;
             Dirty();
         }
 
         public override void SetData(Enum key, object value)
         {
+            if (data.TryGetValue(key, out var existing) && existing.Equals(value))
+                return;
+
             data[key] = value;
             Dirty();
         }
@@ -32,17 +40,17 @@ namespace Robust.Server.GameObjects
             return (T)data[key];
         }
 
-        public override bool TryGetData<T>(Enum key, [MaybeNullWhen(false)] out T data)
+        public override bool TryGetData<T>(Enum key, [NotNullWhen(true)] out T data)
         {
             return TryGetData(key, out data);
         }
 
-        public override bool TryGetData<T>(string key, [MaybeNullWhen(false)] out T data)
+        public override bool TryGetData<T>(string key, [NotNullWhen(true)] out T data)
         {
             return TryGetData(key, out data);
         }
 
-        bool TryGetData<T>(object key, [MaybeNullWhen(false)] out T data)
+        private bool TryGetData<T>(object key, [NotNullWhen(true)] out T data)
         {
             if (this.data.TryGetValue(key, out var dat))
             {
@@ -54,7 +62,7 @@ namespace Robust.Server.GameObjects
             return false;
         }
 
-        public override ComponentState GetComponentState()
+        public override ComponentState GetComponentState(ICommonSession player)
         {
             return new AppearanceComponentState(data);
         }

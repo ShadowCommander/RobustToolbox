@@ -1,14 +1,14 @@
 using System;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
-using JetBrains.Annotations;
-using Robust.Client.Interfaces.Console;
-using Robust.Client.Interfaces.UserInterface;
+using Robust.Client.Graphics;
 using Robust.Shared;
+using Robust.Shared.Asynchronous;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Utility;
@@ -24,52 +24,64 @@ namespace Robust.Client.UserInterface
         // Uses nativefiledialog to open the file dialogs cross platform.
         // On Linux, if the kdialog command is found, it will be used instead.
         // TODO: Should we maybe try to avoid running kdialog if the DE isn't KDE?
+        [Dependency] private readonly IClydeInternal _clyde = default!;
+        [Dependency] private readonly ITaskManager _taskManager = default!;
 
-#if MACOS
-        [Dependency] private readonly Shared.Asynchronous.ITaskManager _taskManager;
-#endif
-
-#if LINUX
         private bool _kDialogAvailable;
         private bool _checkedKDialogAvailable;
-#endif
 
         static FileDialogManager()
         {
             DllMapHelper.RegisterSimpleMap(typeof(FileDialogManager).Assembly, "swnfd");
         }
 
-        public async Task<string?> OpenFile(FileDialogFilters? filters = null)
+        public async Task<Stream?> OpenFile(FileDialogFilters? filters = null)
         {
-#if LINUX
+            var name = await GetOpenFileName(filters);
+            if (name == null)
+            {
+                return null;
+            }
+
+            return File.Open(name, FileMode.Open);
+        }
+
+        private async Task<string?> GetOpenFileName(FileDialogFilters? filters)
+        {
             if (await IsKDialogAvailable())
             {
                 return await OpenFileKDialog(filters);
             }
-#endif
+
             return await OpenFileNfd(filters);
         }
 
-        public async Task<string?> SaveFile()
+        public async Task<(Stream, bool)?> SaveFile()
         {
-#if LINUX
+            var name = await GetSaveFileName();
+            if (name == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return (File.Open(name, FileMode.Open), true);
+            }
+            catch (FileNotFoundException)
+            {
+                return (File.Open(name, FileMode.Create), false);
+            }
+        }
+
+        private async Task<string?> GetSaveFileName()
+        {
             if (await IsKDialogAvailable())
             {
                 return await SaveFileKDialog();
             }
-#endif
-            return await SaveFileNfd();
-        }
 
-        public async Task<string?> OpenFolder()
-        {
-#if LINUX
-            if (await IsKDialogAvailable())
-            {
-                return await OpenFolderKDialog();
-            }
-#endif
-            return await OpenFolderNfd();
+            return await SaveFileNfd();
         }
 
         private unsafe Task<string?> OpenFileNfd(FileDialogFilters? filters)
@@ -118,6 +130,7 @@ namespace Robust.Client.UserInterface
             });
         }
 
+        /*
         private unsafe Task<string?> OpenFolderNfd()
         {
             // Have to run it in the thread pool to avoid blocking the main thread.
@@ -130,23 +143,38 @@ namespace Robust.Client.UserInterface
                 return HandleNfdResult(result, outPath);
             });
         }
+        */
 
         // ReSharper disable once MemberCanBeMadeStatic.Local
         private Task<string?> RunAsyncMaybe(Func<string?> action)
         {
-#if MACOS
-            // macOS seems pretty annoying about having the file dialog opened from the main thread.
-            // So we are forced to execute this synchronously on the main thread.
-            // Also I'm calling RunOnMainThread here to provide safety in case this is ran from a different thread.
-            // nativefiledialog doesn't provide any form of async API, so this WILL lock up the client.
-            var tcs = new TaskCompletionSource<string>();
-            _taskManager.RunOnMainThread(() => tcs.SetResult(action()));
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // macOS seems pretty annoying about having the file dialog opened from the main thread.
+                // So we are forced to execute this synchronously on the main thread.
+                // Also I'm calling RunOnMainThread here to provide safety in case this is ran from a different thread.
+                // nativefiledialog doesn't provide any form of async API, so this WILL lock up the client.
+                var tcs = new TaskCompletionSource<string?>();
+                _taskManager.RunOnMainThread(() => tcs.SetResult(action()));
 
-            return tcs.Task;
-#else
-            // Luckily, GTK Linux and COM Windows are both happily threaded. Yay!
-            return Task.Run(action);
-#endif
+                return tcs.Task;
+            }
+            else
+            {
+                // Luckily, GTK Linux and COM Windows are both happily threaded. Yay!
+                // * Actual attempts to have multiple file dialogs up at the same time, and the resulting crashes,
+                // have shown that at least for GTK+ (Linux), just because it can handle being on any thread doesn't mean it handle being on two at the same time.
+                // Testing system was Ubuntu 20.04.
+                // COM on Windows might handle this, but honestly, who exactly wants to risk it?
+                // In particular this could very well be an swnfd issue.
+                return Task.Run(() =>
+                {
+                    lock (this)
+                    {
+                        return action();
+                    }
+                });
+            }
         }
 
         private static unsafe string? HandleNfdResult(sw_nfdresult result, byte* outPath)
@@ -171,7 +199,6 @@ namespace Robust.Client.UserInterface
             }
         }
 
-#if LINUX
         private async Task CheckKDialogSupport()
         {
             var currentDesktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
@@ -212,7 +239,7 @@ namespace Robust.Client.UserInterface
             }
         }
 
-        private static Task<string?> OpenFileKDialog(FileDialogFilters? filters)
+        private Task<string?> OpenFileKDialog(FileDialogFilters? filters)
         {
             var sb = new StringBuilder();
 
@@ -249,17 +276,19 @@ namespace Robust.Client.UserInterface
             return RunKDialog("--getopenfilename", Environment.GetEnvironmentVariable("HOME")!, sb.ToString());
         }
 
-        private static Task<string?> SaveFileKDialog()
+        private Task<string?> SaveFileKDialog()
         {
             return RunKDialog("--getsavefilename");
         }
 
-        private static Task<string?> OpenFolderKDialog()
+        /*
+        private Task<string?> OpenFolderKDialog()
         {
             return RunKDialog("--getexistingdirectory");
         }
+        */
 
-        private static async Task<string?> RunKDialog(params string[] options)
+        private async Task<string?> RunKDialog(params string[] options)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -274,11 +303,17 @@ namespace Robust.Client.UserInterface
                 startInfo.ArgumentList.Add(option);
             }
 
+            if (_clyde.GetX11WindowId() is { } id)
+            {
+                startInfo.ArgumentList.Add("--attach");
+                startInfo.ArgumentList.Add(id.ToString());
+            }
+
             var process = Process.Start(startInfo);
 
             DebugTools.AssertNotNull(process);
 
-            await process.WaitForExitAsync();
+            await process!.WaitForExitAsync();
 
             // Cancel hit.
             if (process.ExitCode == 1)
@@ -291,6 +326,9 @@ namespace Robust.Client.UserInterface
 
         private async Task<bool> IsKDialogAvailable()
         {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                return false;
+
             if (!_checkedKDialogAvailable)
             {
                 await CheckKDialogSupport();
@@ -299,7 +337,6 @@ namespace Robust.Client.UserInterface
 
             return _kDialogAvailable;
         }
-#endif
 
         [DllImport("swnfd.dll")]
         private static extern unsafe byte* sw_NFD_GetError();
@@ -312,9 +349,11 @@ namespace Robust.Client.UserInterface
         private static extern unsafe sw_nfdresult
             sw_NFD_SaveDialog(byte* filterList, byte* defaultPath, byte** outPath);
 
+        /*
         [DllImport("swnfd.dll")]
         private static extern unsafe sw_nfdresult
             sw_NFD_PickFolder(byte* defaultPath, byte** outPath);
+            */
 
         [DllImport("swnfd.dll")]
         private static extern unsafe void sw_NFD_Free(void* ptr);
@@ -324,29 +363,6 @@ namespace Robust.Client.UserInterface
             SW_NFD_ERROR,
             SW_NFD_OKAY,
             SW_NFD_CANCEL,
-        }
-    }
-
-    [UsedImplicitly]
-    internal sealed class TestOpenFileCommand : IConsoleCommand
-    {
-        // ReSharper disable once StringLiteralTypo
-        public string Command => "testopenfile";
-        public string Description => string.Empty;
-        public string Help => string.Empty;
-
-        public bool Execute(IDebugConsole console, params string[] args)
-        {
-            Inner(console);
-            return false;
-        }
-
-        private static async void Inner(IDebugConsole console)
-        {
-            var manager = IoCManager.Resolve<IFileDialogManager>();
-            var path = await manager.OpenFile();
-
-            console.AddLine(path ?? string.Empty);
         }
     }
 }

@@ -1,5 +1,4 @@
 ﻿using JetBrains.Annotations;
-using Robust.Shared.Interfaces.GameObjects;
 
 namespace Robust.Shared.GameObjects
 {
@@ -12,11 +11,6 @@ namespace Robust.Shared.GameObjects
         {
             Entity = entity;
         }
-    }
-
-    public class EntityMovementMessage : ComponentMessage
-    {
-        public EntityMovementMessage() { }
     }
 
     /// <summary>

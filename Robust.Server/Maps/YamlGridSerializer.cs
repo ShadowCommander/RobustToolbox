@@ -1,11 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using Robust.Shared.Interfaces.Map;
 using Robust.Shared.Map;
-using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
@@ -27,7 +25,6 @@ namespace Robust.Server.Maps
 
             info.Add("chunksize", grid.ChunkSize.ToString(CultureInfo.InvariantCulture));
             info.Add("tilesize", grid.TileSize.ToString(CultureInfo.InvariantCulture));
-            info.Add("snapsize", grid.SnapSize.ToString(CultureInfo.InvariantCulture));
 
             var chunks = grid.GetMapChunks();
             foreach (var chunk in chunks)

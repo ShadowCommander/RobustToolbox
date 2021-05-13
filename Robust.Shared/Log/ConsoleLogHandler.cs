@@ -1,5 +1,4 @@
-﻿using Robust.Shared.Interfaces.Log;
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -42,11 +41,11 @@ namespace Robust.Shared.Log
         private const string LogBeforeLevel = AnsiFgDefault + "[";
         private const string LogAfterLevel = AnsiFgDefault + "] ";
 
-        private readonly Stream _stream = new BufferedStream(System.Console.OpenStandardOutput(), 2 * 1024 * 1024);
+        private readonly Stream _stream = new BufferedStream(System.Console.OpenStandardOutput(), 128 * 1024);
 
-        private readonly StringBuilder _line = new StringBuilder(1024);
+        private readonly StringBuilder _line = new(1024);
 
-        private readonly Timer _timer = new Timer(0.1);
+        private readonly Timer _timer = new(0.1);
 
         private readonly bool _isUtf16Out = System.Console.OutputEncoding.CodePage == Encoding.Unicode.CodePage;
 

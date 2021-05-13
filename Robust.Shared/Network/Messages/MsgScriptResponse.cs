@@ -1,8 +1,7 @@
 using System.IO;
 using Lidgren.Network;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Serialization;
 using Robust.Shared.IoC;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 
 #nullable disable
@@ -20,14 +19,14 @@ namespace Robust.Shared.Network.Messages
         {
         }
 
+        #endregion
+
         public int ScriptSession { get; set; }
         public bool WasComplete { get; set; }
 
         // Echo of the entered code with syntax highlighting applied.
         public FormattedMessage Echo;
         public FormattedMessage Response;
-
-        #endregion
 
         public override void ReadFromBuffer(NetIncomingMessage buffer)
         {
@@ -38,8 +37,9 @@ namespace Robust.Shared.Network.Messages
             {
                 var serializer = IoCManager.Resolve<IRobustSerializer>();
 
+                buffer.ReadPadBits();
                 var length = buffer.ReadVariableInt32();
-                using var stream = buffer.ReadAsStream(length);
+                using var stream = buffer.ReadAlignedMemory(length);
                 serializer.DeserializeDirect(stream, out Echo);
                 serializer.DeserializeDirect(stream, out Response);
             }
@@ -52,6 +52,7 @@ namespace Robust.Shared.Network.Messages
 
             if (WasComplete)
             {
+                buffer.WritePadBits();
                 var serializer = IoCManager.Resolve<IRobustSerializer>();
 
                 var memoryStream = new MemoryStream();

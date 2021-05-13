@@ -1,37 +1,25 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using Robust.Client.Interfaces;
-using Robust.Client.Interfaces.Graphics.ClientEye;
-using Robust.Client.Interfaces.Input;
-using Robust.Client.Interfaces.Placement;
-using Robust.Client.Interfaces.ResourceManagement;
+using Robust.Client.GameObjects;
+using Robust.Client.Graphics;
+using Robust.Client.Input;
+using Robust.Client.Player;
 using Robust.Client.ResourceManagement;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Map;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Physics;
-using Robust.Shared.Interfaces.Reflection;
-using Robust.Shared.Interfaces.Timing;
-using Robust.Shared.IoC;
-using Robust.Shared.Prototypes;
-using Robust.Shared.Maths;
-using Robust.Shared.Map;
-using Robust.Shared.Network.Messages;
-using Robust.Client.Graphics;
-using Robust.Client.GameObjects;
-using Robust.Client.GameObjects.EntitySystems;
-using Robust.Client.Graphics.Drawing;
-using Robust.Client.Interfaces.Graphics;
-using Robust.Client.Interfaces.Graphics.Overlays;
-using Robust.Client.Player;
 using Robust.Shared.Input;
 using Robust.Shared.Input.Binding;
-using Robust.Shared.Utility;
-using Robust.Shared.Serialization;
+using Robust.Shared.IoC;
+using Robust.Shared.Map;
+using Robust.Shared.Maths;
+using Robust.Shared.Network;
+using Robust.Shared.Network.Messages;
+using Robust.Shared.Physics;
+using Robust.Shared.Prototypes;
+using Robust.Shared.Reflection;
 using Robust.Shared.Timing;
+using Robust.Shared.Utility;
 
 namespace Robust.Client.Placement
 {
@@ -47,7 +35,7 @@ namespace Robust.Client.Placement
         [Dependency] public readonly IEyeManager eyeManager = default!;
         [Dependency] private readonly IInputManager _inputManager = default!;
         [Dependency] private readonly IEntitySystemManager _entitySystemManager = default!;
-        [Dependency] private readonly IEntityManager _entityManager = default!;
+        [Dependency] public readonly IEntityManager EntityManager = default!;
         [Dependency] private readonly IPrototypeManager _prototypeManager = default!;
         [Dependency] private readonly IBaseClient _baseClient = default!;
         [Dependency] private readonly IOverlayManager _overlayManager = default!;
@@ -61,8 +49,8 @@ namespace Robust.Client.Placement
         /// <summary>
         /// Dictionary of all placement mode types
         /// </summary>
-        private readonly Dictionary<string, Type> _modeDictionary = new Dictionary<string, Type>();
-        private readonly List<Tuple<GridCoordinates, TimeSpan>> _pendingTileChanges = new List<Tuple<GridCoordinates, TimeSpan>>();
+        private readonly Dictionary<string, Type> _modeDictionary = new();
+        private readonly List<Tuple<EntityCoordinates, TimeSpan>> _pendingTileChanges = new();
 
         /// <summary>
         /// Tells this system to try to handle placement of an entity during the next frame
@@ -77,7 +65,7 @@ namespace Robust.Client.Placement
         /// <summary>
         /// Holds the anchor that we can try to spawn in a line or a grid from
         /// </summary>
-        public GridCoordinates StartPoint { get; set; }
+        public EntityCoordinates StartPoint { get; set; }
 
         /// <summary>
         /// Whether the placement manager is currently in a mode where it accepts actions
@@ -98,9 +86,19 @@ namespace Robust.Client.Placement
         public bool Eraser { get; private set; }
 
         /// <summary>
+        /// Holds the selection rectangle for the eraser
+        /// </summary>
+        public Box2? EraserRect { get; set; }
+
+        /// <summary>
+        /// Drawing shader for drawing without being affected by lighting
+        /// </summary>
+        private ShaderInstance? _drawingShader { get; set; }
+
+        /// <summary>
         /// The texture we use to show from our placement manager to represent the entity to place
         /// </summary>
-        public IDirectionalTextureProvider? CurrentBaseSprite { get; set; }
+        public List<IDirectionalTextureProvider>? CurrentTextures { get; set; }
 
         /// <summary>
         /// Which of the placement orientations we are trying to place with
@@ -126,14 +124,6 @@ namespace Robust.Client.Placement
                 if (value != null)
                 {
                     PlacementOffset = value.PlacementOffset;
-
-                    if (value.Components.ContainsKey("BoundingBox") && value.Components.ContainsKey("Collidable"))
-                    {
-                        var map = value.Components["BoundingBox"];
-                        var serializer = YamlObjectSerializer.NewReader(map);
-                        serializer.DataField(ref _colliderAABB, "aabb", new Box2(0f, 0f, 0f, 0f));
-                        return;
-                    }
                 }
 
                 _colliderAABB = new Box2(0f, 0f, 0f, 0f);
@@ -143,7 +133,7 @@ namespace Robust.Client.Placement
         public Vector2i PlacementOffset { get; set; }
 
 
-        private Box2 _colliderAABB = new Box2(0f, 0f, 0f, 0f);
+        private Box2 _colliderAABB = new(0f, 0f, 0f, 0f);
 
         /// <summary>
         /// The box which certain placement modes collision checks will be done against
@@ -164,6 +154,8 @@ namespace Robust.Client.Placement
 
         public void Initialize()
         {
+            _drawingShader = _prototypeManager.Index<ShaderPrototype>("unshaded").Instance();
+
             NetworkManager.RegisterNetMessage<MsgPlacement>(MsgPlacement.NAME, HandlePlacementMessage);
 
             _modeDictionary.Clear();
@@ -193,13 +185,30 @@ namespace Robust.Client.Placement
                 .Bind(EngineKeyFunctions.EditorGridPlace, InputCmdHandler.FromDelegate(
                     session =>
                     {
-                        if (IsActive && !Eraser) ActivateGridMode();
+                        if (IsActive)
+                        {
+                            if (Eraser)
+                            {
+                                EraseRectMode();
+                            }
+                            else
+                            {
+                                ActivateGridMode();
+                            }
+                        }
                     }))
                 .Bind(EngineKeyFunctions.EditorPlaceObject, new PointerStateInputCmdHandler(
                     (session, coords, uid) =>
                     {
                         if (!IsActive)
                             return false;
+
+                        if (EraserRect.HasValue)
+                        {
+                            HandleRectDeletion(StartPoint, EraserRect.Value);
+                            EraserRect = null;
+                            return true;
+                        }
 
                         if (Eraser)
                         {
@@ -211,7 +220,7 @@ namespace Robust.Client.Placement
                                 return false;
                             }
 
-                            HandleDeletion(_entityManager.GetEntity(uid));
+                            HandleDeletion(EntityManager.GetEntity(uid));
                         }
                         else
                         {
@@ -311,7 +320,7 @@ namespace Robust.Client.Placement
         {
             PlacementChanged?.Invoke(this, EventArgs.Empty);
             Hijack = null;
-            CurrentBaseSprite = null;
+            CurrentTextures = null;
             CurrentPrototype = null;
             CurrentPermission = null;
             CurrentMode = null;
@@ -319,11 +328,15 @@ namespace Robust.Client.Placement
             _placenextframe = false;
             IsActive = false;
             Eraser = false;
+            EraserRect = null;
             PlacementOffset = Vector2i.Zero;
         }
 
         public void Rotate()
         {
+            if (Hijack != null && !Hijack.CanRotate)
+                return;
+
             switch (Direction)
             {
                 case Direction.North:
@@ -372,7 +385,7 @@ namespace Robust.Client.Placement
             }
         }
 
-        public bool HandleDeletion(GridCoordinates coordinates)
+        public bool HandleDeletion(EntityCoordinates coordinates)
         {
             if (!IsActive || !Eraser) return false;
             if (Hijack != null)
@@ -389,6 +402,15 @@ namespace Robust.Client.Placement
             var msg = NetworkManager.CreateNetMessage<MsgPlacement>();
             msg.PlaceType = PlacementManagerMessage.RequestEntRemove;
             msg.EntityUid = entity.Uid;
+            NetworkManager.ClientSendMessage(msg);
+        }
+
+        public void HandleRectDeletion(EntityCoordinates start, Box2 rect)
+        {
+            var msg = NetworkManager.CreateNetMessage<MsgPlacement>();
+            msg.PlaceType = PlacementManagerMessage.RequestRectRemove;
+            msg.EntityCoordinates = new EntityCoordinates(StartPoint.EntityId, rect.BottomLeft);
+            msg.RectSize = rect.Size;
             NetworkManager.ClientSendMessage(msg);
         }
 
@@ -413,9 +435,9 @@ namespace Robust.Client.Placement
             else Clear();
         }
 
-        public void BeginPlacing(PlacementInformation info)
+        public void BeginPlacing(PlacementInformation info, PlacementHijack? hijack = null)
         {
-            BeginHijackedPlacing(info);
+            BeginHijackedPlacing(info, hijack);
         }
 
         public void BeginHijackedPlacing(PlacementInformation info, PlacementHijack? hijack = null)
@@ -459,19 +481,70 @@ namespace Robust.Client.Placement
 
             if (map == MapId.Nullspace || CurrentPermission == null || CurrentMode == null)
             {
-                coordinates = new ScreenCoordinates(Vector2.Zero);
+                coordinates = default;
                 return false;
             }
 
-            coordinates = new ScreenCoordinates(_inputManager.MouseScreenPosition);
+            coordinates = _inputManager.MouseScreenPosition;
             return true;
+        }
+
+        private bool CurrentEraserMouseCoordinates(out EntityCoordinates coordinates)
+        {
+            var ent = PlayerManager.LocalPlayer?.ControlledEntity;
+            if (ent == null)
+            {
+                coordinates = new EntityCoordinates();
+                return false;
+            }
+            else
+            {
+                var map = ent.Transform.MapID;
+                if (map == MapId.Nullspace || !Eraser)
+                {
+                    coordinates = new EntityCoordinates();
+                    return false;
+                }
+                coordinates = EntityCoordinates.FromMap(ent.EntityManager, MapManager,
+                    eyeManager.ScreenToMap(_inputManager.MouseScreenPosition));
+                return true;
+            }
         }
 
         /// <inheritdoc />
         public void FrameUpdate(FrameEventArgs e)
         {
             if (!CurrentMousePosition(out var mouseScreen))
+            {
+                if (EraserRect.HasValue)
+                {
+                    if (!CurrentEraserMouseCoordinates(out EntityCoordinates end))
+                        return;
+                    float b, l, t, r;
+                    if (StartPoint.X < end.X)
+                    {
+                        l = StartPoint.X;
+                        r = end.X;
+                    }
+                    else
+                    {
+                        l = end.X;
+                        r = StartPoint.X;
+                    }
+                    if (StartPoint.Y < end.Y)
+                    {
+                        b = StartPoint.Y;
+                        t = end.Y;
+                    }
+                    else
+                    {
+                        b = end.Y;
+                        t = StartPoint.Y;
+                    }
+                    EraserRect = new Box2(l, b, r, t);
+                }
                 return;
+            }
 
             CurrentMode!.AlignPlacementMode(mouseScreen);
 
@@ -509,6 +582,15 @@ namespace Robust.Client.Placement
             PlacementType = PlacementTypes.Grid;
         }
 
+        private void EraseRectMode()
+        {
+            if (!CurrentEraserMouseCoordinates(out EntityCoordinates coordinates))
+                return;
+
+            StartPoint = coordinates;
+            EraserRect = new Box2(coordinates.Position, Vector2.Zero);
+        }
+
         private bool DeactivateSpecialPlacement()
         {
             if (PlacementType == PlacementTypes.None)
@@ -521,7 +603,14 @@ namespace Robust.Client.Placement
         private void Render(DrawingHandleWorld handle)
         {
             if (CurrentMode == null || !IsActive)
+            {
+                if (EraserRect.HasValue)
+                {
+                    handle.UseShader(_drawingShader);
+                    handle.DrawRect(EraserRect.Value, new Color(255, 0, 0, 50));
+                }
                 return;
+            }
 
             CurrentMode.Render(handle);
 
@@ -552,7 +641,7 @@ namespace Robust.Client.Placement
         {
             var prototype = _prototypeManager.Index<EntityPrototype>(templateName);
 
-            CurrentBaseSprite = IconComponent.GetPrototypeIcon(prototype, ResourceCache);
+            CurrentTextures = SpriteComponent.GetPrototypeTextures(prototype, ResourceCache).ToList();
             CurrentPrototype = prototype;
 
             IsActive = true;
@@ -560,26 +649,31 @@ namespace Robust.Client.Placement
 
         private void PreparePlacementTile()
         {
-            CurrentBaseSprite = ResourceCache
-                .GetResource<TextureResource>(new ResourcePath("/Textures/UserInterface/tilebuildoverlay.png")).Texture;
+            CurrentTextures = new List<IDirectionalTextureProvider>
+            {ResourceCache
+                .GetResource<TextureResource>(new ResourcePath("/Textures/UserInterface/tilebuildoverlay.png")).Texture};
 
             IsActive = true;
         }
 
-        private void RequestPlacement(GridCoordinates coordinates)
+        private void RequestPlacement(EntityCoordinates coordinates)
         {
-            if (MapManager.GetGrid(coordinates.GridID).ParentMapId == MapId.Nullspace) return;
             if (CurrentPermission == null) return;
             if (!CurrentMode!.IsValidPosition(coordinates)) return;
             if (Hijack != null && Hijack.HijackPlacementRequest(coordinates)) return;
 
             if (CurrentPermission.IsTile)
             {
-                var grid = MapManager.GetGrid(coordinates.GridID);
+                var gridId = coordinates.GetGridId(EntityManager);
+                // If we have actually placed something on a valid grid...
+                if (gridId.IsValid())
+                {
+                    var grid = MapManager.GetGrid(gridId);
 
-                // no point changing the tile to the same thing.
-                if (grid.GetTileRef(coordinates).Tile.TypeId == CurrentPermission.TileType)
-                    return;
+                    // no point changing the tile to the same thing.
+                    if (grid.GetTileRef(coordinates).Tile.TypeId == CurrentPermission.TileType)
+                        return;
+                }
 
                 foreach (var tileChange in _pendingTileChanges)
                 {
@@ -588,7 +682,7 @@ namespace Robust.Client.Placement
                         return;
                 }
 
-                var tuple = new Tuple<GridCoordinates, TimeSpan>(coordinates, _time.RealTime + _pendingTileTimeout);
+                var tuple = new Tuple<EntityCoordinates, TimeSpan>(coordinates, _time.RealTime + _pendingTileTimeout);
                 _pendingTileChanges.Add(tuple);
             }
 
@@ -604,14 +698,14 @@ namespace Robust.Client.Placement
                 message.EntityTemplateName = CurrentPermission.EntityType;
 
             // world x and y
-            message.GridCoordinates = coordinates;
+            message.EntityCoordinates = coordinates;
 
             message.DirRcv = Direction;
 
             NetworkManager.ClientSendMessage(message);
         }
 
-        public enum PlacementTypes
+        public enum PlacementTypes : byte
         {
             None = 0,
             Line = 1,

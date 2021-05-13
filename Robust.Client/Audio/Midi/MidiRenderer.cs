@@ -1,11 +1,9 @@
 using System;
-using System.IO;
 using System.Runtime.Intrinsics.X86;
 using NFluidsynth;
-using Robust.Client.Interfaces.Graphics;
+using Robust.Client.Graphics;
 using Robust.Shared.Asynchronous;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Log;
+using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
@@ -14,7 +12,7 @@ using MidiEvent = NFluidsynth.MidiEvent;
 
 namespace Robust.Client.Audio.Midi
 {
-    public enum MidiRendererStatus
+    public enum MidiRendererStatus : byte
     {
         None,
         Input,
@@ -62,14 +60,19 @@ namespace Robust.Client.Audio.Midi
         bool DisablePercussionChannel { get; set; }
 
         /// <summary>
+        /// Whether to drop messages for program change events.
+        /// </summary>
+        bool DisableProgramChangeEvent { get; set; }
+
+        /// <summary>
         ///     Gets the total number of ticks possible for the MIDI player.
         /// </summary>
         int PlayerTotalTick { get; }
 
         /// <summary>
-        ///     Gets the current tick of the MIDI player.
+        ///     Gets or sets (seeks) the current tick of the MIDI player.
         /// </summary>
-        int PlayerTick { get; }
+        int PlayerTick { get; set; }
 
         /// <summary>
         ///     Gets the current tick of the sequencer.
@@ -85,12 +88,6 @@ namespace Robust.Client.Audio.Midi
         ///     Start listening for midi input.
         /// </summary>
         bool OpenInput();
-
-        /// <summary>
-        ///     Start playing a midi file.
-        /// </summary>
-        /// <param name="filename">Path to the midi file</param>
-        bool OpenMidi(string filename);
 
         /// <summary>
         ///     Start playing a midi file.
@@ -139,7 +136,7 @@ namespace Robust.Client.Audio.Midi
         ///     This is only used if <see cref="Mono"/> is set to True
         ///     and <see cref="TrackingEntity"/> is null.
         /// </summary>
-        GridCoordinates? TrackingCoordinates { get; set; }
+        EntityCoordinates? TrackingCoordinates { get; set; }
 
         /// <summary>
         ///     Send a midi event for the renderer to play.
@@ -188,7 +185,7 @@ namespace Robust.Client.Audio.Midi
         private bool _loopMidi = false;
         private const int SampleRate = 44100;
         private const int Buffers = SampleRate / 2205;
-        private readonly object _playerStateLock = new object();
+        private readonly object _playerStateLock = new();
         private SequencerClientId _synthRegister;
         public IClydeBufferedAudioSource Source { get; set; }
         public bool Disposed { get; private set; } = false;
@@ -236,7 +233,16 @@ namespace Robust.Client.Audio.Midi
         public bool DisableProgramChangeEvent { get; set; } = true;
 
         public int PlayerTotalTick => _player?.GetTotalTicks ?? 0;
-        public int PlayerTick => _player?.CurrentTick ?? 0;
+        public int PlayerTick
+        {
+            get => _player?.CurrentTick ?? 0;
+            set
+            {
+                lock (_playerStateLock)
+                    _player?.Seek(Math.Max(Math.Min(value, PlayerTotalTick), 0));
+            }
+        }
+
         public uint SequencerTick => _sequencer?.Tick ?? 0;
         public double SequencerTimeScale => _sequencer?.TimeScale ?? 0;
 
@@ -255,7 +261,7 @@ namespace Robust.Client.Audio.Midi
         }
 
         public IEntity? TrackingEntity { get; set; } = null;
-        public GridCoordinates? TrackingCoordinates { get; set; } = null;
+        public EntityCoordinates? TrackingCoordinates { get; set; } = null;
 
         internal bool Free { get; set; } = false;
 
@@ -292,11 +298,6 @@ namespace Robust.Client.Audio.Midi
             return true;
         }
 
-        public bool OpenMidi(string filename)
-        {
-            return OpenMidi(File.ReadAllBytes(filename));
-        }
-
         public bool OpenMidi(ReadOnlySpan<byte> buffer)
         {
             if (Disposed)
@@ -316,9 +317,8 @@ namespace Robust.Client.Audio.Midi
 
             lock (_playerStateLock)
             {
-                if (_player == null)
-                    _player = new NFluidsynth.Player(_synth);
-                _player.Stop();
+                _player?.Dispose();
+                _player = new NFluidsynth.Player(_synth);
                 _player.AddMem(buffer);
                 _player.SetPlaybackCallback(MidiPlayerEventHandler);
                 _player.Play();
@@ -357,10 +357,7 @@ namespace Robust.Client.Audio.Midi
 
         public void StopAllNotes()
         {
-            for (var i = 0; i < 16; i++)
-            {
-                _synth.AllNotesOff(i);
-            }
+            _synth.AllNotesOff(-1);
         }
 
         public void LoadSoundfont(string filename, bool resetPresets = false)
@@ -481,12 +478,6 @@ namespace Robust.Client.Audio.Midi
                 lock(_playerStateLock)
                     switch (midiEvent.Type)
                     {
-                        // Sometimes MIDI files spam these for no good reason and I can't find any info on what they are.
-                        case 1:
-                        case 5:
-                        case 81:
-                            break;
-
                         // Note On 0x80
                         case 144:
                             _synth.NoteOn(midiEvent.Channel, midiEvent.Key, midiEvent.Velocity);
@@ -509,8 +500,10 @@ namespace Robust.Client.Audio.Midi
 
                         // Program Change - 0xC0
                         case 192:
-                            if(!DisableProgramChangeEvent)
+                            if (!DisableProgramChangeEvent)
                                 _synth.ProgramChange(midiEvent.Channel, midiEvent.Program);
+                            else
+                                return;
                             break;
 
                         // Channel Pressure - 0xD0
@@ -523,13 +516,17 @@ namespace Robust.Client.Audio.Midi
                             _synth.PitchBend(midiEvent.Channel, midiEvent.Pitch);
                             break;
 
+                        // Sometimes MIDI files spam these for no good reason and I can't find any info on what they are.
+                        case 1:
+                        case 5:
+                        case 81:
                         // System Messages - 0xF0
                         case 240:
-                            break;
+                            return;
 
                         default:
                             _midiSawmill.Warning("Unhandled midi event of type {0}", midiEvent.Type, midiEvent);
-                            break;
+                            return;
                     }
             }
             catch (FluidSynthInteropException)

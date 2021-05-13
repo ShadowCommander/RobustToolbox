@@ -1,10 +1,9 @@
 ﻿using System;
 using Lidgren.Network;
 using Robust.Shared.GameStates;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Serialization;
 using Robust.Shared.IoC;
 using System.IO;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 
 #nullable disable
@@ -37,7 +36,7 @@ namespace Robust.Shared.Network.Messages
         {
             MsgSize = buffer.LengthBytes;
             var length = buffer.ReadVariableInt32();
-            using var stream = buffer.ReadAsStream(length);
+            using var stream = buffer.ReadAlignedMemory(length);
             var serializer = IoCManager.Resolve<IRobustSerializer>();
             serializer.DeserializeDirect(stream, out State);
 

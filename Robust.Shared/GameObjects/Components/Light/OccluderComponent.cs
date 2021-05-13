@@ -1,6 +1,10 @@
 using System;
+using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Prototypes;
+using Robust.Shared.Players;
 using Robust.Shared.Serialization;
+using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.GameObjects
@@ -10,8 +14,10 @@ namespace Robust.Shared.GameObjects
         public sealed override string Name => "Occluder";
         public sealed override uint? NetID => NetIDs.OCCLUDER;
 
+        [DataField("enabled")]
         private bool _enabled = true;
-        private Box2 _boundingBox = new Box2(-0.5f, -0.5f, 0.5f, 0.5f);
+        [DataField("boundingBox")]
+        private Box2 _boundingBox = new(-0.5f, -0.5f, 0.5f, 0.5f);
 
         [ViewVariables(VVAccess.ReadWrite)]
         public Box2 BoundingBox
@@ -25,8 +31,9 @@ namespace Robust.Shared.GameObjects
             }
         }
 
-        protected virtual void BoundingBoxChanged()
+        private void BoundingBoxChanged()
         {
+            Owner.EntityManager.EventBus.RaiseEvent(EventSource.Local, new OccluderBoundingBoxChangedMessage(this));
         }
 
         [ViewVariables(VVAccess.ReadWrite)]
@@ -35,20 +42,35 @@ namespace Robust.Shared.GameObjects
             get => _enabled;
             set
             {
+                if (_enabled == value)
+                    return;
+
                 _enabled = value;
                 Dirty();
             }
         }
 
-        public override void ExposeData(ObjectSerializer serializer)
+        protected override void Startup()
         {
-            base.ExposeData(serializer);
+            base.Startup();
 
-            serializer.DataField(ref _enabled, "enabled", true);
-            serializer.DataField(ref _boundingBox, "boundingBox", new Box2(-0.5f, -0.5f, 0.5f, 0.5f));
+            EntitySystem.Get<OccluderSystem>().AddOrUpdateEntity(Owner, Owner.Transform.Coordinates);
         }
 
-        public override ComponentState GetComponentState()
+        protected override void Shutdown()
+        {
+            base.Shutdown();
+
+            var transform = Owner.Transform;
+            var map = transform.MapID;
+            if (map != MapId.Nullspace)
+            {
+                Owner.EntityManager.EventBus.RaiseEvent(EventSource.Local,
+                    new OccluderTreeRemoveOccluderMessage(this, map, transform.GridID));
+            }
+        }
+
+        public override ComponentState GetComponentState(ICommonSession player)
         {
             return new OccluderComponentState(Enabled, BoundingBox);
         }
@@ -77,6 +99,16 @@ namespace Robust.Shared.GameObjects
                 Enabled = enabled;
                 BoundingBox = boundingBox;
             }
+        }
+    }
+
+    internal struct OccluderBoundingBoxChangedMessage
+    {
+        public OccluderComponent Occluder;
+
+        public OccluderBoundingBoxChangedMessage(OccluderComponent occluder)
+        {
+            Occluder = occluder;
         }
     }
 }

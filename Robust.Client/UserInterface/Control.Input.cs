@@ -33,6 +33,7 @@ namespace Robust.Client.UserInterface
         }
 
         public event Action<GUIBoundKeyEventArgs>? OnKeyBindDown;
+        public event Action<GUIBoundKeyEventArgs>? OnKeyBindUp;
 
         protected internal virtual void KeyBindDown(GUIBoundKeyEventArgs args)
         {
@@ -41,6 +42,7 @@ namespace Robust.Client.UserInterface
 
         protected internal virtual void KeyBindUp(GUIBoundKeyEventArgs args)
         {
+            OnKeyBindUp?.Invoke(args);
         }
 
         protected internal virtual void MouseMove(GUIMouseMoveEventArgs args)
@@ -134,7 +136,7 @@ namespace Robust.Client.UserInterface
         /// </summary>
         public Vector2 GlobalPosition { get; }
 
-        public Vector2 GlobalPixelPosition { get; }
+        public ScreenCoordinates GlobalPixelPosition { get; }
 
         /// <summary>
         ///     Position of the mouse, relative to the current control.
@@ -145,7 +147,7 @@ namespace Robust.Client.UserInterface
 
         protected GUIMouseEventArgs(Control sourceControl,
             Vector2 globalPosition,
-            Vector2 globalPixelPosition,
+            ScreenCoordinates globalPixelPosition,
             Vector2 relativePosition,
             Vector2 relativePixelPosition)
         {
@@ -168,7 +170,7 @@ namespace Robust.Client.UserInterface
         public GUIMouseMoveEventArgs(Vector2 relative,
             Control sourceControl,
             Vector2 globalPosition,
-            Vector2 globalPixelPosition,
+            ScreenCoordinates globalPixelPosition,
             Vector2 relativePosition,
             Vector2 relativePixelPosition)
             : base(sourceControl, globalPosition, globalPixelPosition, relativePosition, relativePixelPosition)
@@ -184,7 +186,7 @@ namespace Robust.Client.UserInterface
         public GUIMouseWheelEventArgs(Vector2 delta,
             Control sourceControl,
             Vector2 globalPosition,
-            Vector2 globalPixelPosition,
+            ScreenCoordinates globalPixelPosition,
             Vector2 relativePosition,
             Vector2 relativePixelPosition)
             : base(sourceControl, globalPosition, globalPixelPosition, relativePosition, relativePixelPosition)

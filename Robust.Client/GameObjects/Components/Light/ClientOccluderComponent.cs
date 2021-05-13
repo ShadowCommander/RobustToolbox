@@ -1,7 +1,7 @@
 using System;
-using Robust.Client.GameObjects.EntitySystems;
+using System.Collections.Generic;
 using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Components.Transform;
+using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.ViewVariables;
@@ -10,12 +10,11 @@ namespace Robust.Client.GameObjects
 {
     internal sealed class ClientOccluderComponent : OccluderComponent
     {
-        internal SnapGridComponent? SnapGrid { get; private set; }
-        [ViewVariables] private (GridId, MapIndices) _lastPosition;
+        [Dependency] private readonly IMapManager _mapManager = default!;
+        
+        [ViewVariables] private (GridId, Vector2i) _lastPosition;
         [ViewVariables] internal OccluderDir Occluding { get; private set; }
         [ViewVariables] internal uint UpdateGeneration { get; set; }
-
-        public bool TreeUpdateQueued { get; set; }
 
         public override bool Enabled
         {
@@ -32,51 +31,36 @@ namespace Robust.Client.GameObjects
         {
             base.Startup();
 
-            if (Owner.TryGetComponent(out SnapGridComponent? snap))
+            if (Owner.Transform.Anchored)
             {
-                SnapGrid = snap;
-                SnapGrid.OnPositionChanged += SnapGridOnPositionChanged;
-
                 SnapGridOnPositionChanged();
             }
         }
 
-        private void SnapGridOnPositionChanged()
+        public void SnapGridOnPositionChanged()
         {
             SendDirty();
-            _lastPosition = (Owner.Transform.GridID, SnapGrid!.Position);
+
+            if(!Owner.Transform.Anchored)
+                return;
+
+            var grid = _mapManager.GetGrid(Owner.Transform.GridID);
+            _lastPosition = (Owner.Transform.GridID, grid.TileIndicesFor(Owner.Transform.Coordinates));
         }
 
         protected override void Shutdown()
         {
             base.Shutdown();
 
-            if (SnapGrid != null)
-            {
-                SnapGrid.OnPositionChanged -= SnapGridOnPositionChanged;
-            }
-
             SendDirty();
-        }
-
-        public override void OnRemove()
-        {
-            base.OnRemove();
-
-            var map = Owner.Transform.MapID;
-            if (map != MapId.Nullspace)
-            {
-                Owner.EntityManager.EventBus.RaiseEvent(EventSource.Local,
-                    new RenderTreeRemoveOccluderMessage(this, map));
-            }
         }
 
         private void SendDirty()
         {
-            if (SnapGrid != null)
+            if (Owner.Transform.Anchored)
             {
                 Owner.EntityManager.EventBus.RaiseEvent(EventSource.Local,
-                    new OccluderDirtyEvent(Owner, _lastPosition, SnapGrid.Offset));
+                    new OccluderDirtyEvent(Owner, _lastPosition));
             }
         }
 
@@ -84,16 +68,18 @@ namespace Robust.Client.GameObjects
         {
             Occluding = OccluderDir.None;
 
-            if (Deleted || SnapGrid == null)
+            if (Deleted || !Owner.Transform.Anchored)
             {
                 return;
             }
 
             void CheckDir(Direction dir, OccluderDir oclDir)
             {
-                foreach (var neighbor in SnapGrid.GetInDir(dir))
+                var grid = _mapManager.GetGrid(Owner.Transform.GridID);
+                var position = Owner.Transform.Coordinates;
+                foreach (var neighbor in grid.GetInDir(position, dir))
                 {
-                    if (neighbor.TryGetComponent(out ClientOccluderComponent? comp) && comp.Enabled)
+                    if (Owner.EntityManager.ComponentManager.TryGetComponent(neighbor, out ClientOccluderComponent? comp) && comp.Enabled)
                     {
                         Occluding |= oclDir;
                         break;
@@ -107,11 +93,6 @@ namespace Robust.Client.GameObjects
             CheckDir(Direction.West, OccluderDir.West);
         }
 
-        protected override void BoundingBoxChanged()
-        {
-            Owner.EntityManager.EventBus.RaiseEvent(EventSource.Local, new OccluderBoundingBoxChangedMessage(this));
-        }
-
         [Flags]
         internal enum OccluderDir : byte
         {
@@ -121,15 +102,5 @@ namespace Robust.Client.GameObjects
             South = 1 << 2,
             West = 1 << 3,
         }
-    }
-
-    internal struct OccluderBoundingBoxChangedMessage
-    {
-        public OccluderBoundingBoxChangedMessage(ClientOccluderComponent occluder)
-        {
-            Occluder = occluder;
-        }
-
-        public ClientOccluderComponent Occluder { get; }
     }
 }

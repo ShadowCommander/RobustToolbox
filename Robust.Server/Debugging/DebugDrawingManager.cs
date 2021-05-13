@@ -1,21 +1,21 @@
 ﻿using System.Diagnostics;
-using Robust.Server.Interfaces.Debugging;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Physics;
+using JetBrains.Annotations;
 using Robust.Shared.IoC;
+using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
+using Robust.Shared.Physics;
 
 namespace Robust.Server.Debugging
 {
+    [UsedImplicitly]
     internal class DebugDrawingManager : IDebugDrawingManager
     {
         [Dependency] private readonly IServerNetManager _net = default!;
-        [Dependency] private readonly IPhysicsManager _physics = default!;
 
         public void Initialize()
         {
             _net.RegisterNetMessage<MsgRay>(MsgRay.NAME);
-            _physics.DebugDrawRay += data => PhysicsOnDebugDrawRay(data);
+            // TODO _physics.DebugDrawRay += data => PhysicsOnDebugDrawRay(data);
         }
 
         [Conditional("DEBUG")]

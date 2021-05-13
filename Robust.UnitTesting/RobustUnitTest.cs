@@ -1,17 +1,19 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
+using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Reflection;
 using Robust.Shared.IoC;
+using Robust.Shared.Map;
+using Robust.Shared.Reflection;
+using Robust.Shared.Utility;
 
 namespace Robust.UnitTesting
 {
-    public enum UnitTestProject
+    public enum UnitTestProject : byte
     {
         Server,
         Client
@@ -28,6 +30,7 @@ namespace Robust.UnitTesting
             // Clear state across tests.
             IoCManager.InitThread();
             IoCManager.Clear();
+
             RegisterIoC();
 
             var assemblies = new List<Assembly>(4);
@@ -46,7 +49,40 @@ namespace Robust.UnitTesting
             assemblies.Add(AppDomain.CurrentDomain.GetAssemblyByName("Robust.Shared"));
             assemblies.Add(Assembly.GetExecutingAssembly());
 
+            var configurationManager = IoCManager.Resolve<IConfigurationManagerInternal>();
+
+            configurationManager.Initialize(Project == UnitTestProject.Server);
+
+            foreach (var assembly in assemblies)
+            {
+                configurationManager.LoadCVarsFromAssembly(assembly);
+            }
+
+            var contentAssemblies = GetContentAssemblies();
+
+            foreach (var assembly in contentAssemblies)
+            {
+                configurationManager.LoadCVarsFromAssembly(assembly);
+            }
+
+            var entMan = IoCManager.Resolve<IEntityManager>();
+
+            if(entMan.EventBus == null)
+            {
+                entMan.Initialize();
+                entMan.Startup();
+            }
+
+            IoCManager.Resolve<IEntityLookup>().Initialize();
+            var mapMan = IoCManager.Resolve<IMapManager>();
+            mapMan.Initialize();
+            mapMan.Startup();
+
             IoCManager.Resolve<IReflectionManager>().LoadAssemblies(assemblies);
+
+            var modLoader = IoCManager.Resolve<TestingModLoader>();
+            modLoader.Assemblies = contentAssemblies;
+            modLoader.TryLoadModulesFrom(ResourcePath.Root, "");
 
             // Required components for the engine to work
             var compFactory = IoCManager.Resolve<IComponentFactory>();
@@ -54,6 +90,11 @@ namespace Robust.UnitTesting
             {
                 compFactory.Register<MetaDataComponent>();
                 compFactory.RegisterReference<MetaDataComponent, IMetaDataComponent>();
+            }
+
+            if(entMan.EventBus == null)
+            {
+                entMan.Startup();
             }
         }
 
@@ -67,6 +108,13 @@ namespace Robust.UnitTesting
         /// Called after all IoC registration has been done, but before the graph has been built.
         /// This allows one to add new IoC types or overwrite existing ones if needed.
         /// </summary>
-        protected virtual void OverrideIoC() { }
+        protected virtual void OverrideIoC()
+        {
+        }
+
+        protected virtual Assembly[] GetContentAssemblies()
+        {
+            return Array.Empty<Assembly>();
+        }
     }
 }

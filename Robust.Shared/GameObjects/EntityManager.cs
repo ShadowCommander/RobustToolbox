@@ -1,15 +1,11 @@
-﻿using System;
-using System.Collections.Concurrent;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using Robust.Shared.GameObjects.Components;
-using Robust.Shared.GameObjects.Components.Transform;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.GameObjects.Components;
-using Robust.Shared.Interfaces.Map;
-using Robust.Shared.Interfaces.Timing;
+using System.Runtime.CompilerServices;
+using Prometheus;
 using Robust.Shared.IoC;
+using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics;
@@ -19,18 +15,20 @@ using Robust.Shared.Utility;
 
 namespace Robust.Shared.GameObjects
 {
+    public delegate void EntityQueryCallback(IEntity entity);
+
     /// <inheritdoc />
-    public abstract class EntityManager : IEntityManager
+    public class EntityManager : IEntityManager
     {
         #region Dependencies
 
-        [Dependency] private readonly IEntityNetworkManager EntityNetworkManager = default!;
-        [Dependency] protected readonly IPrototypeManager PrototypeManager = default!;
-        [Dependency] protected readonly IEntitySystemManager EntitySystemManager = default!;
-        [Dependency] private readonly IComponentFactory ComponentFactory = default!;
-        [Dependency] private readonly IComponentManager _componentManager = default!;
-        [Dependency] private readonly IGameTiming _gameTiming = default!;
-        [Dependency] private readonly IMapManager _mapManager = default!;
+        [IoC.Dependency] protected readonly IPrototypeManager PrototypeManager = default!;
+        [IoC.Dependency] protected readonly IEntitySystemManager EntitySystemManager = default!;
+        [IoC.Dependency] private readonly IComponentFactory ComponentFactory = default!;
+        [IoC.Dependency] private readonly IComponentManager _componentManager = default!;
+        [IoC.Dependency] private readonly IMapManager _mapManager = default!;
+        [IoC.Dependency] private readonly IGameTiming _gameTiming = default!;
+        [IoC.Dependency] private readonly IPauseManager _pauseManager = default!;
 
         #endregion Dependencies
 
@@ -41,30 +39,42 @@ namespace Robust.Shared.GameObjects
         public IComponentManager ComponentManager => _componentManager;
 
         /// <inheritdoc />
-        public IEntityNetworkManager EntityNetManager => EntityNetworkManager;
+        public IEntitySystemManager EntitySysManager => EntitySystemManager;
 
         /// <inheritdoc />
-        public IEntitySystemManager EntitySysManager => EntitySystemManager;
+        public virtual IEntityNetworkManager? EntityNetManager => null;
 
         /// <summary>
         ///     All entities currently stored in the manager.
         /// </summary>
-        protected readonly Dictionary<EntityUid, Entity> Entities = new Dictionary<EntityUid, Entity>();
+        protected readonly Dictionary<EntityUid, Entity> Entities = new();
 
-        protected readonly List<Entity> AllEntities = new List<Entity>();
+        protected readonly List<Entity> AllEntities = new();
 
-        private readonly EntityEventBus _eventBus = new EntityEventBus();
+        private EntityEventBus _eventBus = null!;
+
+        protected virtual int NextEntityUid { get; set; } = (int)EntityUid.FirstUid;
 
         /// <inheritdoc />
         public IEventBus EventBus => _eventBus;
 
+        public event EventHandler<EntityUid>? EntityAdded;
+        public event EventHandler<EntityUid>? EntityInitialized;
+        public event EventHandler<EntityUid>? EntityStarted;
+        public event EventHandler<EntityUid>? EntityDeleted;
+
         public bool Started { get; protected set; }
+
+        /// <summary>
+        /// Constructs a new instance of <see cref="EntityManager"/>.
+        /// </summary>
+        public EntityManager()
+        {
+        }
 
         public virtual void Initialize()
         {
-            EntityNetworkManager.SetupNetworking();
-            EntityNetworkManager.ReceivedComponentMessage += (sender, compMsg) => DispatchComponentMessage(compMsg);
-            EntityNetworkManager.ReceivedSystemMessage += (sender, systemMsg) => EventBus.RaiseEvent(EventSource.Network, systemMsg);
+            _eventBus = new EntityEventBus(this);
 
             ComponentManager.Initialize();
             _componentManager.ComponentRemoved += (sender, args) => _eventBus.UnsubscribeEvents(args.Component);
@@ -72,22 +82,45 @@ namespace Robust.Shared.GameObjects
 
         public virtual void Startup()
         {
+            if (Started)
+            {
+                throw new InvalidOperationException("Startup() called multiple times");
+            }
+
+            EntitySystemManager.Initialize();
+            Started = true;
         }
 
         public virtual void Shutdown()
         {
             FlushEntities();
+            _eventBus.ClearEventTables();
             EntitySystemManager.Shutdown();
             Started = false;
             _componentManager.Clear();
         }
 
-        public virtual void Update(float frameTime)
+        public virtual void TickUpdate(float frameTime, Histogram? histogram)
         {
-            EntityNetworkManager.Update();
-            EntitySystemManager.Update(frameTime);
-            _eventBus.ProcessEventQueue();
-            CullDeletedEntities();
+            using (histogram?.WithLabels("EntitySystems").NewTimer())
+            {
+                EntitySystemManager.TickUpdate(frameTime);
+            }
+
+            using (histogram?.WithLabels("EntityEventBus").NewTimer())
+            {
+                _eventBus.ProcessEventQueue();
+            }
+
+            using (histogram?.WithLabels("ComponentCull").NewTimer())
+            {
+                _componentManager.CullRemovedComponents();
+            }
+
+            using (histogram?.WithLabels("EntityCull").NewTimer())
+            {
+                CullDeletedEntities();
+            }
         }
 
         public virtual void FrameUpdate(float frameTime)
@@ -98,22 +131,56 @@ namespace Robust.Shared.GameObjects
         #region Entity Management
 
         /// <inheritdoc />
-        public abstract IEntity CreateEntityUninitialized(string? prototypeName);
+        public virtual IEntity CreateEntityUninitialized(string? prototypeName)
+        {
+            return CreateEntity(prototypeName);
+        }
 
         /// <inheritdoc />
-        public abstract IEntity CreateEntityUninitialized(string? prototypeName, GridCoordinates coordinates);
+        public virtual IEntity CreateEntityUninitialized(string? prototypeName, EntityCoordinates coordinates)
+        {
+            var newEntity = CreateEntity(prototypeName);
+
+            if (TryGetEntity(coordinates.EntityId, out var entity))
+            {
+                newEntity.Transform.AttachParent(entity);
+                newEntity.Transform.Coordinates = coordinates;
+            }
+
+            return newEntity;
+        }
 
         /// <inheritdoc />
-        public abstract IEntity CreateEntityUninitialized(string? prototypeName, MapCoordinates coordinates);
+        public virtual IEntity CreateEntityUninitialized(string? prototypeName, MapCoordinates coordinates)
+        {
+            var newEntity = CreateEntity(prototypeName);
+            newEntity.Transform.AttachParent(_mapManager.GetMapEntity(coordinates.MapId));
+            newEntity.Transform.WorldPosition = coordinates.Position;
+            return newEntity;
+        }
 
         /// <inheritdoc />
-        public abstract IEntity SpawnEntity(string? protoName, GridCoordinates coordinates);
+        public virtual IEntity SpawnEntity(string? protoName, EntityCoordinates coordinates)
+        {
+            if (!coordinates.IsValid(this))
+                throw new InvalidOperationException($"Tried to spawn entity {protoName} on invalid coordinates {coordinates}.");
+
+            var entity = CreateEntityUninitialized(protoName, coordinates);
+
+            InitializeAndStartEntity((Entity) entity);
+
+            if (_pauseManager.IsMapInitialized(coordinates.GetMapId(this))) entity.RunMapInit();
+
+            return entity;
+        }
 
         /// <inheritdoc />
-        public abstract IEntity SpawnEntity(string? protoName, MapCoordinates coordinates);
-
-        /// <inheritdoc />
-        public abstract IEntity SpawnEntityNoMapInit(string? protoName, GridCoordinates coordinates);
+        public virtual IEntity SpawnEntity(string? protoName, MapCoordinates coordinates)
+        {
+            var entity = CreateEntityUninitialized(protoName, coordinates);
+            InitializeAndStartEntity((Entity) entity);
+            return entity;
+        }
 
         /// <summary>
         /// Returns an entity by id
@@ -150,20 +217,6 @@ namespace Robust.Shared.GameObjects
             return query.Match(this);
         }
 
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesAt(MapId mapId, Vector2 position, bool approximate = false)
-        {
-            foreach (var entity in _entityTreesPerMap[mapId].Query(position, approximate))
-            {
-                var transform = entity.Transform;
-                if (MathHelper.CloseTo(transform.GridPosition.X, position.X) &&
-                    MathHelper.CloseTo(transform.GridPosition.Y, position.Y))
-                {
-                    yield return entity;
-                }
-            }
-        }
-
         public IEnumerable<IEntity> GetEntities()
         {
             // Need to do an iterator loop to avoid issues with concurrent access.
@@ -186,7 +239,52 @@ namespace Robust.Shared.GameObjects
         /// <param name="e">Entity to remove</param>
         public virtual void DeleteEntity(IEntity e)
         {
-            e.Shutdown();
+            // Networking blindly spams entities at this function, they can already be
+            // deleted from being a child of a previously deleted entity
+            // TODO: Why does networking need to send deletes for child entities?
+            if (e.Deleted)
+                return;
+
+            if (e.LifeStage >= EntityLifeStage.Terminating)
+#if !EXCEPTION_TOLERANCE
+                throw new InvalidOperationException("Called Delete on an entity already being deleted.");
+#else
+                return;
+#endif
+
+            RecursiveDeleteEntity(e);
+        }
+
+        private void RecursiveDeleteEntity(IEntity entity)
+        {
+            if(entity.Deleted) //TODO: Why was this still a child if it was already deleted?
+                return;
+
+            var transform = entity.Transform;
+            entity.LifeStage = EntityLifeStage.Terminating;
+
+            EventBus.RaiseLocalEvent(entity.Uid, new EntityTerminatingEvent(), false);
+
+            // DeleteEntity modifies our _children collection, we must cache the collection to iterate properly
+            foreach (var childTransform in transform.Children.ToArray())
+            {
+                // Recursion Alert
+                RecursiveDeleteEntity(childTransform.Owner);
+            }
+
+            // Dispose all my components, in a safe order so transform is available
+            ComponentManager.DisposeComponents(entity.Uid);
+
+            // map does not have a parent node, everything else needs to be detached
+            if (transform.ParentUid != EntityUid.Invalid)
+            {
+                // Detach from my parent, if any
+                transform.DetachParentToNull();
+            }
+
+            entity.LifeStage = EntityLifeStage.Deleted;
+            EntityDeleted?.Invoke(this, entity.Uid);
+            EventBus.RaiseEvent(EventSource.Local, new EntityDeletedMessage(entity));
         }
 
         public void DeleteEntity(EntityUid uid)
@@ -194,13 +292,18 @@ namespace Robust.Shared.GameObjects
             if (TryGetEntity(uid, out var entity))
             {
                 DeleteEntity(entity);
-                UpdateEntityTree(entity);
             }
         }
 
         public bool EntityExists(EntityUid uid)
         {
-            return TryGetEntity(uid, out var _);
+            if (!TryGetEntity(uid, out var ent))
+                return false;
+
+            if (ent.Deleted)
+                return false;
+
+            return true;
         }
 
         /// <summary>
@@ -210,7 +313,7 @@ namespace Robust.Shared.GameObjects
         {
             foreach (var e in GetEntities())
             {
-                e.Shutdown();
+                DeleteEntity(e);
             }
 
             CullDeletedEntities();
@@ -250,10 +353,15 @@ namespace Robust.Shared.GameObjects
                 throw new InvalidOperationException($"UID already taken: {uid}");
             }
 
-            var entity = new Entity();
+            var entity = new Entity(this, uid.Value);
 
-            entity.SetManagers(this);
-            entity.SetUid(uid.Value);
+
+            // we want this called before adding components
+            EntityAdded?.Invoke(this, entity.Uid);
+
+            // We do this after the event, so if the event throws we have not committed 
+            Entities[entity.Uid] = entity;
+            AllEntities.Add(entity);
 
             // allocate the required MetaDataComponent
             _componentManager.AddComponent<MetaDataComponent>(entity);
@@ -261,8 +369,6 @@ namespace Robust.Shared.GameObjects
             // allocate the required TransformComponent
             _componentManager.AddComponent<TransformComponent>(entity);
 
-            Entities[entity.Uid] = entity;
-            AllEntities.Add(entity);
 
             return entity;
         }
@@ -270,7 +376,7 @@ namespace Robust.Shared.GameObjects
         /// <summary>
         ///     Allocates an entity and loads components but does not do initialization.
         /// </summary>
-        private protected Entity CreateEntity(string? prototypeName, EntityUid? uid = null)
+        private protected virtual Entity CreateEntity(string? prototypeName, EntityUid? uid = null)
         {
             if (prototypeName == null)
                 return AllocEntity(uid);
@@ -286,7 +392,7 @@ namespace Robust.Shared.GameObjects
                 // Exception during entity loading.
                 // Need to delete the entity to avoid corrupt state causing crashes later.
                 DeleteEntity(entity);
-                throw new EntityCreationException("Exception inside CreateEntity", e);
+                throw new EntityCreationException($"Exception inside CreateEntity with prototype {prototypeName}", e);
             }
         }
 
@@ -300,6 +406,7 @@ namespace Robust.Shared.GameObjects
             try
             {
                 InitializeEntity(entity);
+                EntityInitialized?.Invoke(this, entity.Uid);
                 StartEntity(entity);
             }
             catch (Exception e)
@@ -314,9 +421,10 @@ namespace Robust.Shared.GameObjects
             entity.InitializeComponents();
         }
 
-        private protected static void StartEntity(Entity entity)
+        protected void StartEntity(Entity entity)
         {
             entity.StartAllComponents();
+            EntityStarted?.Invoke(this, entity.Uid);
         }
 
         private void CullDeletedEntities()
@@ -334,16 +442,15 @@ namespace Robust.Shared.GameObjects
 
                 AllEntities.RemoveSwap(i);
                 Entities.Remove(entity.Uid);
-                RemoveFromEntityTrees(entity);
 
                 // Process the one we just swapped next.
                 i--;
             }
         }
 
-        #endregion Entity Management
+#endregion Entity Management
 
-        private void DispatchComponentMessage(NetworkComponentMessage netMsg)
+        protected void DispatchComponentMessage(NetworkComponentMessage netMsg)
         {
             var compMsg = netMsg.Message;
             var compChannel = netMsg.Channel;
@@ -365,259 +472,17 @@ namespace Robust.Shared.GameObjects
             }
         }
 
-        protected abstract EntityUid GenerateEntityUid();
-
-        #region Spatial Queries
-
+        /// <summary>
+        ///     Factory for generating a new EntityUid for an entity currently being created.
+        /// </summary>
         /// <inheritdoc />
-        public bool AnyEntitiesIntersecting(MapId mapId, Box2 box, bool approximate = false) =>
-            _entityTreesPerMap[mapId].Query(box, approximate).Any(ent => !ent.Deleted);
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesIntersecting(MapId mapId, Box2 position, bool approximate = false)
+        protected virtual EntityUid GenerateEntityUid()
         {
-            if (mapId == MapId.Nullspace)
-            {
-                yield break;
-            }
-
-            var newResults = _entityTreesPerMap[mapId].Query(position, approximate); // .ToArray();
-
-            foreach (var entity in newResults)
-            {
-                if (entity.Deleted)
-                {
-                    continue;
-                }
-
-                yield return entity;
-            }
+            return new(NextEntityUid++);
         }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesIntersecting(MapId mapId, Vector2 position, bool approximate = false)
-        {
-            const float range = .00001f / 2;
-            var aabb = new Box2(position, position).Enlarged(range);
-
-            if (mapId == MapId.Nullspace)
-            {
-                yield break;
-            }
-
-            var newResults = _entityTreesPerMap[mapId].Query(aabb, approximate);
-
-
-            foreach (var entity in newResults)
-            {
-                if (Intersecting(entity, position))
-                {
-                    yield return entity;
-                }
-            }
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesIntersecting(MapCoordinates position, bool approximate = false)
-        {
-            return GetEntitiesIntersecting(position.MapId, position.Position, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesIntersecting(GridCoordinates position, bool approximate = false)
-        {
-            var mapPos = position.ToMap(_mapManager);
-            return GetEntitiesIntersecting(mapPos.MapId, mapPos.Position, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesIntersecting(IEntity entity, bool approximate = false)
-        {
-            if (entity.TryGetComponent<ICollidableComponent>(out var component))
-            {
-                return GetEntitiesIntersecting(entity.Transform.MapID, component.WorldAABB, approximate);
-            }
-
-            return GetEntitiesIntersecting(entity.Transform.GridPosition, approximate);
-        }
-
-        /// <inheritdoc />
-        public bool IsIntersecting(IEntity entityOne, IEntity entityTwo)
-        {
-            var position = entityOne.Transform.MapPosition.Position;
-            return Intersecting(entityTwo, position);
-        }
-
-        private bool Intersecting(IEntity entity, Vector2 mapPosition)
-        {
-            if (entity.TryGetComponent(out ICollidableComponent? component))
-            {
-                if (component.WorldAABB.Contains(mapPosition))
-                    return true;
-            }
-            else
-            {
-                var transform = entity.Transform;
-                var entPos = transform.WorldPosition;
-                if (MathHelper.CloseTo(entPos.X, mapPosition.X)
-                    && MathHelper.CloseTo(entPos.Y, mapPosition.Y))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesInRange(GridCoordinates position, float range, bool approximate = false)
-        {
-            var aabb = new Box2(position.Position - new Vector2(range / 2, range / 2),
-                position.Position + new Vector2(range / 2, range / 2));
-            return GetEntitiesIntersecting(_mapManager.GetGrid(position.GridID).ParentMapId, aabb, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesInRange(MapId mapId, Box2 box, float range, bool approximate = false)
-        {
-            var aabb = box.Enlarged(range);
-            return GetEntitiesIntersecting(mapId, aabb, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesInRange(MapId mapId, Vector2 point, float range, bool approximate = false)
-        {
-            var aabb = new Box2(point, point).Enlarged(range);
-            return GetEntitiesIntersecting(mapId, aabb, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesInRange(IEntity entity, float range, bool approximate = false)
-        {
-            if (entity.TryGetComponent<ICollidableComponent>(out var component))
-            {
-                return GetEntitiesInRange(entity.Transform.MapID, component.WorldAABB, range, approximate);
-            }
-
-            return GetEntitiesInRange(entity.Transform.GridPosition, range, approximate);
-        }
-
-        /// <inheritdoc />
-        public IEnumerable<IEntity> GetEntitiesInArc(GridCoordinates coordinates, float range, Angle direction,
-            float arcWidth, bool approximate = false)
-        {
-            var position = coordinates.ToMap(_mapManager).Position;
-
-            foreach (var entity in GetEntitiesInRange(coordinates, range * 2, approximate))
-            {
-                var angle = new Angle(entity.Transform.WorldPosition - position);
-                if (angle.Degrees < direction.Degrees + arcWidth / 2 &&
-                    angle.Degrees > direction.Degrees - arcWidth / 2)
-                    yield return entity;
-            }
-        }
-
-        #endregion
-
-
-        #region Entity DynamicTree
-
-        private readonly Dictionary<MapId, DynamicTree<IEntity>> _entityTreesPerMap =
-            new Dictionary<MapId, DynamicTree<IEntity>>();
-
-        public virtual bool UpdateEntityTree(IEntity entity)
-        {
-            if (entity.Deleted)
-            {
-                RemoveFromEntityTrees(entity);
-                return true;
-            }
-
-            if (!entity.Initialized || !Entities.ContainsKey(entity.Uid))
-            {
-                return false;
-            }
-
-            var transform = entity.Transform;
-
-            DebugTools.Assert(transform.Initialized);
-
-            var mapId = transform.MapID;
-
-            if (!_entityTreesPerMap.TryGetValue(mapId, out var entTree))
-            {
-                entTree = EntityTreeFactory();
-                _entityTreesPerMap.Add(mapId, entTree);
-            }
-
-            // for debugging
-            var necessary = 0;
-
-            if (entTree.AddOrUpdate(entity))
-            {
-                ++necessary;
-            }
-
-            foreach (var childTx in entity.Transform.Children)
-            {
-                if (UpdateEntityTree(childTx.Owner))
-                {
-                    ++necessary;
-                }
-            }
-
-            return necessary > 0;
-        }
-
-        public bool RemoveFromEntityTree(IEntity entity, MapId mapId)
-        {
-            if (_entityTreesPerMap.TryGetValue(mapId, out var tree))
-            {
-                return tree.Remove(entity);
-            }
-
-            return false;
-        }
-
-        private void RemoveFromEntityTrees(IEntity entity)
-        {
-            foreach (var mapId in _mapManager.GetAllMapIds())
-            {
-                if (_entityTreesPerMap.TryGetValue(mapId, out var entTree))
-                {
-                    entTree.Remove(entity);
-                }
-            }
-        }
-
-        private static DynamicTree<IEntity> EntityTreeFactory() =>
-            new DynamicTree<IEntity>(
-                GetWorldAabbFromEntity,
-                capacity: 16,
-                growthFunc: x => x == 16 ? 3840 : x + 256
-            );
-
-        protected static Box2 GetWorldAabbFromEntity(in IEntity ent)
-        {
-            if (ent.Deleted)
-                return new Box2(0, 0, 0, 0);
-
-            if (ent.TryGetComponent(out ICollidableComponent? collider))
-                return collider.WorldAABB;
-
-            var pos = ent.Transform.WorldPosition;
-            return new Box2(pos, pos);
-        }
-
-        #endregion
-
-        public virtual void Update()
-        {
-        }
-
     }
 
-    public enum EntityMessageType
+    public enum EntityMessageType : byte
     {
         Error = 0,
         ComponentMessage,

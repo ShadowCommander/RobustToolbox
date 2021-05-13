@@ -13,7 +13,7 @@ namespace Robust.Shared.Utility
     ///     Is a reference to EITHER an RSI + RSI State, OR a bare texture path.
     /// </summary>
     [Serializable, NetSerializable]
-    public class SpriteSpecifier
+    public abstract class SpriteSpecifier
     {
         public static readonly SpriteSpecifier Invalid = new Texture(new ResourcePath("."));
 
@@ -71,6 +71,29 @@ namespace Robust.Shared.Utility
             public override int GetHashCode()
             {
                 return TexturePath.GetHashCode();
+            }
+        }
+
+        [Serializable, NetSerializable]
+        public sealed class EntityPrototype : SpriteSpecifier
+        {
+            public readonly string EntityPrototypeId;
+
+            public EntityPrototype(string entityPrototypeId)
+            {
+                EntityPrototypeId = entityPrototypeId;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                if (obj is EntityPrototype prototypeIcon)
+                    return EntityPrototypeId == prototypeIcon.EntityPrototypeId;
+                return false;
+            }
+
+            public override int GetHashCode()
+            {
+                return EntityPrototypeId.GetHashCode();
             }
         }
     }

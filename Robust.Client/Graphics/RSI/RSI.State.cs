@@ -16,13 +16,13 @@ namespace Robust.Client.Graphics
         ///     RSIs are folded into a single set of animation timings when loaded.
         ///     This is to simplify animation playback code in-engine.
         /// </remarks>
-        public sealed class State : IDirectionalTextureProvider
+        public sealed class State : IRsiStateLike
         {
             // List of delays for the frame to reach the next frame.
-            private readonly float[] Delays;
+            public readonly float[] Delays;
 
             // 2D array for the texture to use for each animation frame at each direction.
-            private readonly Texture[][] Icons;
+            public readonly Texture[][] Icons;
 
             internal State(Vector2i size, StateId stateId, DirectionType direction, float[] delays, Texture[][] icons)
             {
@@ -79,6 +79,8 @@ namespace Robust.Client.Graphics
             ///     If true, this state has an animation to play.
             /// </summary>
             public bool IsAnimated => DelayCount > 1;
+
+            int IRsiStateLike.AnimationFrameCount => DelayCount;
 
             public Texture GetFrame(Direction direction, int frame)
             {

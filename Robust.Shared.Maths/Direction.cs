@@ -3,17 +3,17 @@
 namespace Robust.Shared.Maths
 {
     [Flags]
-    public enum Direction
+    public enum Direction : sbyte
     {
         Invalid = -1,
-        East = 0,
-        NorthEast = 1,
-        North = 2,
-        NorthWest = 3,
-        West = 4,
-        SouthWest = 5,
-        South = 6,
-        SouthEast = 7,
+        South = 0,
+        SouthEast = 1,
+        East = 2,
+        NorthEast = 3,
+        North = 4,
+        NorthWest = 5,
+        West = 6,
+        SouthWest = 7,
     }
 
     /// <summary>
@@ -22,7 +22,6 @@ namespace Robust.Shared.Maths
     public static class DirectionExtensions
     {
         private const double Segment = 2 * Math.PI / 8.0; // Cut the circle into 8 pieces
-        private const double Offset = Segment / 2.0; // offset the pieces by 1/2 their size
 
         /// <summary>
         /// Converts a direction vector to the closest Direction enum.
@@ -31,7 +30,7 @@ namespace Robust.Shared.Maths
         /// <returns></returns>
         public static Direction GetDir(this Vector2 vec)
         {
-            return vec.ToAngle().GetDir();
+            return Angle.FromWorldVec(vec).GetDir();
         }
 
         /// <summary>
@@ -85,6 +84,17 @@ namespace Robust.Shared.Maths
             return ang;
         }
 
+        private static Vector2[] directionVectors = new[]
+        {
+            new Vector2(0, -1),
+            new Vector2(1, -1).Normalized,
+            new Vector2(1, 0),
+            new Vector2(1, 1).Normalized,
+            new Vector2(0, 1),
+            new Vector2(-1, 1).Normalized,
+            new Vector2(-1, 0),
+            new Vector2(-1, -1).Normalized
+        };
         /// <summary>
         /// Converts a Direction to a normalized Direction vector.
         /// </summary>
@@ -92,7 +102,7 @@ namespace Robust.Shared.Maths
         /// <returns></returns>
         public static Vector2 ToVec(this Direction dir)
         {
-            return dir.ToAngle().ToVec();
+            return directionVectors[(int) dir];
         }
 
         /// <summary>
@@ -102,7 +112,12 @@ namespace Robust.Shared.Maths
         /// <returns>Angle of the vector.</returns>
         public static Angle ToAngle(this Vector2 vec)
         {
-            return Math.Atan2(vec.Y, vec.X);
+            return new(vec);
+        }
+
+        public static Angle ToWorldAngle(this Vector2 vec)
+        {
+            return Angle.FromWorldVec(vec);
         }
     }
 }

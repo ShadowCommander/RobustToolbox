@@ -1,23 +1,16 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using OpenToolkit.Graphics.OpenGL4;
 using Robust.Client.GameObjects;
-using Robust.Client.Graphics.ClientEye;
-using Robust.Client.Graphics.Drawing;
-using Robust.Client.Graphics.Shaders;
-using Robust.Client.Interfaces.Graphics;
-using Robust.Client.Interfaces.Graphics.ClientEye;
 using Robust.Client.Utility;
+using Robust.Shared;
 using Robust.Shared.Maths;
 using Robust.Shared.Utility;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using Color = Robust.Shared.Maths.Color;
-using StencilOp = OpenToolkit.Graphics.OpenGL4.StencilOp;
+using TKStencilOp = OpenToolkit.Graphics.OpenGL4.StencilOp;
 
 namespace Robust.Client.Graphics.Clyde
 {
@@ -72,8 +65,8 @@ namespace Robust.Client.Graphics.Clyde
         // Buffers and data for the batching system. Written into during (queue) and processed during (submit).
         private readonly Vertex2D[] BatchVertexData = new Vertex2D[MaxBatchQuads * 4];
 
-        // Need 5 indices per quad: 4 to draw the quad with triangle strips and another one as primitive restart.
-        private readonly ushort[] BatchIndexData = new ushort[MaxBatchQuads * 5];
+        // Only write from InitRenderingBatchBuffers!
+        private ushort[] BatchIndexData = default!;
         private int BatchVertexIndex;
         private int BatchIndexIndex;
 
@@ -99,6 +92,11 @@ namespace Robust.Client.Graphics.Clyde
 
         private readonly RefList<RenderCommand> _queuedRenderCommands = new RefList<RenderCommand>();
 
+        private void InitRenderingBatchBuffers()
+        {
+            BatchIndexData = new ushort[MaxBatchQuads * GetQuadBatchIndexCount()];
+        }
+
         /// <summary>
         ///     Updates uniform constants shared to all shaders, such as time and pixel size.
         /// </summary>
@@ -119,9 +117,10 @@ namespace Robust.Client.Graphics.Clyde
             view = Matrix3.Identity;
         }
 
-        private static void CalcWorldMatrices(in Vector2i screenSize, IEye eye, out Matrix3 proj, out Matrix3 view)
+        private static void CalcWorldMatrices(in Vector2i screenSize, in Vector2 renderScale, IEye eye,
+            out Matrix3 proj, out Matrix3 view)
         {
-            eye.GetViewMatrix(out view);
+            eye.GetViewMatrix(out view, renderScale);
 
             CalcWorldProjMatrix(screenSize, out proj);
         }
@@ -202,10 +201,11 @@ namespace Robust.Client.Graphics.Clyde
         {
             var loadedTexture = _loadedTextures[command.TextureId];
 
-            GL.BindVertexArray(BatchVAO.Handle);
+            BindVertexArray(BatchVAO.Handle);
             CheckGlError();
 
             var (program, loaded) = ActivateShaderInstance(command.ShaderInstance);
+            SetupGlobalUniformsImmediate(program, loadedTexture.IsSrgb);
 
             GL.ActiveTexture(TextureUnit.Texture0);
             CheckGlError();
@@ -231,7 +231,6 @@ namespace Robust.Client.Graphics.Clyde
 
             program.SetUniformMaybe(UniIModulate, command.Modulate);
             program.SetUniformMaybe(UniITexturePixelSize, Vector2.One / loadedTexture.Size);
-
 
             var primitiveType = MapPrimitiveType(command.PrimitiveType);
             if (command.Indexed)
@@ -265,8 +264,15 @@ namespace Robust.Client.Graphics.Clyde
 
         private void _drawQuad(Vector2 a, Vector2 b, in Matrix3 modelMatrix, GLShaderProgram program)
         {
-            GL.BindVertexArray(QuadVAO.Handle);
+            DrawQuadWithVao(QuadVAO, a, b, modelMatrix, program);
+        }
+
+        private void DrawQuadWithVao(GLHandle vao, Vector2 a, Vector2 b, in Matrix3 modelMatrix,
+            GLShaderProgram program)
+        {
+            BindVertexArray(vao.Handle);
             CheckGlError();
+
             var rectTransform = Matrix3.Identity;
             (rectTransform.R0C0, rectTransform.R1C1) = b - a;
             (rectTransform.R0C2, rectTransform.R1C2) = a;
@@ -279,14 +285,24 @@ namespace Robust.Client.Graphics.Clyde
         }
 
         /// <summary>
-        ///     Flush the render handle, processing and re-pooling all the command lists.
+        ///     Flushes the render handle, processing and re-pooling all the command lists.
         /// </summary>
         private void FlushRenderQueue()
+        {
+            FlushBatchQueue();
+
+            // Reset renderer state.
+            _currentMatrixModel = Matrix3.Identity;
+            _queuedShader = _defaultShader.Handle;
+            SetScissorFull(null);
+        }
+
+        private void FlushBatchQueue()
         {
             // Finish any batches that may have been WiP.
             BreakBatch();
 
-            GL.BindVertexArray(BatchVAO.Handle);
+            BindVertexArray(BatchVAO.Handle);
             CheckGlError();
 
             _debugStats.LargestBatchVertices = Math.Max(BatchVertexIndex, _debugStats.LargestBatchVertices);
@@ -307,11 +323,6 @@ namespace Robust.Client.Graphics.Clyde
 
             ProcessRenderCommands();
             _queuedRenderCommands.Clear();
-
-            // Reset renderer state.
-            _currentMatrixModel = Matrix3.Identity;
-            _queuedShader = _defaultShader.Handle;
-            SetScissorFull(null);
         }
 
         private void SetScissorFull(UIBox2i? state)
@@ -370,6 +381,7 @@ namespace Robust.Client.Graphics.Clyde
 
             program.Use();
 
+            int textureUnitVal = 0;
             // Assign shader parameters to uniform since they may be dirty.
             foreach (var (name, value) in instance.Parameters)
             {
@@ -412,6 +424,15 @@ namespace Robust.Client.Graphics.Clyde
                     case Matrix4 matrix4:
                         program.SetUniform(name, matrix4);
                         break;
+                    case ClydeTexture clydeTexture:
+                        //It's important to start at Texture6 here since DrawCommandBatch uses Texture0 and Texture1 immediately after calling this
+                        //function! If passing in textures as uniforms ever stops working it might be since someone made it use all the way up to Texture6 too.
+                        //Might change this in the future?
+                        TextureUnit cTarget = TextureUnit.Texture6 + textureUnitVal;
+                        SetTexture(cTarget, ((ClydeTexture) clydeTexture).TextureId);
+                        program.SetUniformTexture(name, cTarget);
+                        textureUnitVal++;
+                        break;
                     default:
                         throw new InvalidOperationException($"Unable to handle shader parameter {name}: {value}");
                 }
@@ -432,7 +453,7 @@ namespace Robust.Client.Graphics.Clyde
                 CheckGlError();
                 GL.StencilFunc(ToGLStencilFunc(instance.Stencil.Func), instance.Stencil.Ref, instance.Stencil.ReadMask);
                 CheckGlError();
-                GL.StencilOp(StencilOp.Keep, StencilOp.Keep, ToGLStencilOp(instance.Stencil.Op));
+                GL.StencilOp(TKStencilOp.Keep, TKStencilOp.Keep, ToGLStencilOp(instance.Stencil.Op));
                 CheckGlError();
             }
             else if (_isStencilling)
@@ -476,10 +497,21 @@ namespace Robust.Client.Graphics.Clyde
             _currentMatrixView = view;
         }
 
+        /// <summary>
+        /// Draws a texture quad to the screen.
+        /// </summary>
+        /// <param name="texture">Texture to draw.</param>
+        /// <param name="bl">Bottom left vertex of the quad in object space.</param>
+        /// <param name="br">Bottom right vertex of the quad in object space.</param>
+        /// <param name="tl">Top left vertex of the quad in object space.</param>
+        /// <param name="tr">Top right vertex of the quad in object space.</param>
+        /// <param name="modulate">A color to multiply the texture by when shading.</param>
+        /// <param name="texCoords">The four corners of the texture coordinates, matching the four vertices.</param>
         private void DrawTexture(ClydeHandle texture, Vector2 bl, Vector2 br, Vector2 tl, Vector2 tr, in Color modulate,
-            in Box2 sr)
+            in Box2 texCoords)
         {
-            EnsureBatchState(texture, modulate, true, BatchPrimitiveType.TriangleFan, _queuedShader);
+            EnsureBatchSpaceAvailable(4, GetQuadBatchIndexCount());
+            EnsureBatchState(texture, in modulate, true, GetQuadBatchPrimitiveType(), _queuedShader);
 
             bl = _currentMatrixModel.Transform(bl);
             br = _currentMatrixModel.Transform(br);
@@ -488,19 +520,12 @@ namespace Robust.Client.Graphics.Clyde
 
             // TODO: split batch if necessary.
             var vIdx = BatchVertexIndex;
-            BatchVertexData[vIdx + 0] = new Vertex2D(bl, sr.BottomLeft);
-            BatchVertexData[vIdx + 1] = new Vertex2D(br, sr.BottomRight);
-            BatchVertexData[vIdx + 2] = new Vertex2D(tr, sr.TopRight);
-            BatchVertexData[vIdx + 3] = new Vertex2D(tl, sr.TopLeft);
+            BatchVertexData[vIdx + 0] = new Vertex2D(bl, texCoords.BottomLeft);
+            BatchVertexData[vIdx + 1] = new Vertex2D(br, texCoords.BottomRight);
+            BatchVertexData[vIdx + 2] = new Vertex2D(tr, texCoords.TopRight);
+            BatchVertexData[vIdx + 3] = new Vertex2D(tl, texCoords.TopLeft);
             BatchVertexIndex += 4;
-            var nIdx = BatchIndexIndex;
-            var tIdx = (ushort) vIdx;
-            BatchIndexData[nIdx + 0] = tIdx;
-            BatchIndexData[nIdx + 1] = (ushort) (tIdx + 1);
-            BatchIndexData[nIdx + 2] = (ushort) (tIdx + 2);
-            BatchIndexData[nIdx + 3] = (ushort) (tIdx + 3);
-            BatchIndexData[nIdx + 4] = ushort.MaxValue;
-            BatchIndexIndex += 5;
+            QuadBatchIndexWrite(BatchIndexData, ref BatchIndexIndex, (ushort) vIdx);
 
             _debugStats.LastClydeDrawCalls += 1;
         }
@@ -511,6 +536,8 @@ namespace Robust.Client.Graphics.Clyde
             FinishBatch();
             _batchMetaData = null;
 
+            EnsureBatchSpaceAvailable(vertices.Length, indices.Length);
+
             vertices.CopyTo(BatchVertexData.AsSpan(BatchVertexIndex));
 
             // We are weaving this into the batch buffers for performance (and simplicity).
@@ -519,7 +546,7 @@ namespace Robust.Client.Graphics.Clyde
             {
                 var o = BatchIndexIndex + i;
                 var index = indices[i];
-                if (index != ushort.MaxValue) // Don't offset primitive restart.
+                if (index != PrimitiveRestartIndex) // Don't offset primitive restart.
                 {
                     index = (ushort) (index + BatchVertexIndex);
                 }
@@ -551,6 +578,8 @@ namespace Robust.Client.Graphics.Clyde
         {
             FinishBatch();
             _batchMetaData = null;
+
+            EnsureBatchSpaceAvailable(vertices.Length, 0);
 
             vertices.CopyTo(BatchVertexData.AsSpan(BatchVertexIndex));
 
@@ -587,6 +616,7 @@ namespace Robust.Client.Graphics.Clyde
 
         private void DrawLine(Vector2 a, Vector2 b, Color color)
         {
+            EnsureBatchSpaceAvailable(2, 0);
             EnsureBatchState(_stockTextureWhite.TextureId, color, false, BatchPrimitiveType.LineList, _queuedShader);
 
             a = _currentMatrixModel.Transform(a);
@@ -599,6 +629,14 @@ namespace Robust.Client.Graphics.Clyde
             BatchVertexIndex += 2;
 
             _debugStats.LastClydeDrawCalls += 1;
+        }
+
+        private void EnsureBatchSpaceAvailable(int vtx, int idx)
+        {
+            if (BatchVertexIndex + vtx >= BatchVertexData.Length || BatchIndexIndex + idx > BatchIndexData.Length)
+            {
+                FlushBatchQueue();
+            }
         }
 
         private void DrawSetScissor(UIBox2i? scissorBox)
@@ -717,18 +755,18 @@ namespace Robust.Client.Graphics.Clyde
             _debugStats.LastBatches += 1;
         }
 
-        private static StencilOp ToGLStencilOp(Shaders.StencilOp op)
+        private static TKStencilOp ToGLStencilOp(StencilOp op)
         {
             return op switch
             {
-                Shaders.StencilOp.Keep => StencilOp.Keep,
-                Shaders.StencilOp.Zero => StencilOp.Zero,
-                Shaders.StencilOp.Replace => StencilOp.Replace,
-                Shaders.StencilOp.IncrementClamp => StencilOp.Incr,
-                Shaders.StencilOp.IncrementWrap => StencilOp.IncrWrap,
-                Shaders.StencilOp.DecrementClamp => StencilOp.Decr,
-                Shaders.StencilOp.DecrementWrap => StencilOp.DecrWrap,
-                Shaders.StencilOp.Invert => StencilOp.Invert,
+                StencilOp.Keep => TKStencilOp.Keep,
+                StencilOp.Zero => TKStencilOp.Zero,
+                StencilOp.Replace => TKStencilOp.Replace,
+                StencilOp.IncrementClamp => TKStencilOp.Incr,
+                StencilOp.IncrementWrap => TKStencilOp.IncrWrap,
+                StencilOp.DecrementClamp => TKStencilOp.Decr,
+                StencilOp.DecrementWrap => TKStencilOp.DecrWrap,
+                StencilOp.Invert => TKStencilOp.Invert,
                 _ => throw new NotSupportedException()
             };
         }
@@ -757,83 +795,6 @@ namespace Robust.Client.Graphics.Clyde
             FinishBatch();
 
             _batchMetaData = null;
-        }
-
-        private unsafe void TakeScreenshot(ScreenshotType type)
-        {
-            if (_queuedScreenshots.Count == 0 || _queuedScreenshots.All(p => p.type != type))
-            {
-                return;
-            }
-
-            var delegates = _queuedScreenshots.Where(p => p.type == type).ToList();
-
-            _queuedScreenshots.RemoveAll(p => p.type == type);
-
-            GL.CreateBuffers(1, out uint pbo);
-            CheckGlError();
-            GL.BindBuffer(BufferTarget.PixelPackBuffer, pbo);
-            CheckGlError();
-            GL.BufferData(BufferTarget.PixelPackBuffer, ScreenSize.X * ScreenSize.Y * sizeof(Rgb24), IntPtr.Zero,
-                BufferUsageHint.StreamRead);
-            CheckGlError();
-            GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-            CheckGlError();
-            GL.ReadPixels(0, 0, ScreenSize.X, ScreenSize.Y, PixelFormat.Rgb, PixelType.UnsignedByte, IntPtr.Zero);
-            CheckGlError();
-            var fence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
-            CheckGlError();
-
-            GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-            CheckGlError();
-
-            _transferringScreenshots.Add((pbo, fence, ScreenSize, image => delegates.ForEach(p => p.callback(image))));
-        }
-
-        private unsafe void CheckTransferringScreenshots()
-        {
-            if (_transferringScreenshots.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var screenshot in _transferringScreenshots.ToList())
-            {
-                var (pbo, fence, (width, height), callback) = screenshot;
-
-                int status;
-                GL.GetSync(fence, SyncParameterName.SyncStatus, sizeof(int), null, &status);
-                CheckGlError();
-
-                if (status == (int) All.Signaled)
-                {
-                    GL.BindBuffer(BufferTarget.PixelPackBuffer, pbo);
-                    CheckGlError();
-                    var ptr = GL.MapBuffer(BufferTarget.PixelPackBuffer, BufferAccess.ReadOnly);
-                    CheckGlError();
-
-                    var packSpan = new ReadOnlySpan<Rgb24>((void*) ptr, width * height);
-
-                    var image = new Image<Rgb24>(width, height);
-                    var imageSpan = image.GetPixelSpan();
-
-                    FlipCopy(packSpan, imageSpan, width, height);
-
-                    GL.UnmapBuffer(BufferTarget.PixelPackBuffer);
-                    CheckGlError();
-                    GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-                    CheckGlError();
-                    GL.DeleteBuffer(pbo);
-                    CheckGlError();
-                    GL.DeleteSync(fence);
-                    CheckGlError();
-
-                    _transferringScreenshots.Remove(screenshot);
-
-                    // TODO: Don't do unnecessary copy here.
-                    callback(image);
-                }
-            }
         }
 
         private FullStoredRendererState PushRenderStateFull()
@@ -866,9 +827,121 @@ namespace Robust.Client.Graphics.Clyde
             _lightingReady = false;
             _currentMatrixModel = Matrix3.Identity;
             SetScissorFull(null);
-            BindRenderTargetFull(_mainWindowRenderTarget);
+            BindRenderTargetFull(_mainMainWindowRenderMainTarget);
             _batchMetaData = null;
             _queuedShader = _defaultShader.Handle;
+        }
+
+        private void ResetBlendFunc()
+        {
+            GL.BlendFuncSeparate(
+                BlendingFactorSrc.SrcAlpha,
+                BlendingFactorDest.OneMinusSrcAlpha,
+                BlendingFactorSrc.One,
+                BlendingFactorDest.OneMinusSrcAlpha);
+        }
+
+        private void BlitSecondaryWindows()
+        {
+            // Only got main window.
+            if (_windowing!.AllWindows.Count == 1)
+                return;
+
+            if (!_hasGLFenceSync && _cfg.GetCVar(CVars.DisplayForceSyncWindows))
+            {
+                GL.Finish();
+            }
+
+            if (EffectiveThreadWindowBlit)
+            {
+                foreach (var window in _windowing.AllWindows)
+                {
+                    if (window.IsMainWindow)
+                        continue;
+
+                    window.BlitDoneEvent!.Reset();
+                    window.BlitStartEvent!.Set();
+                    window.BlitDoneEvent.Wait();
+                }
+            }
+            else
+            {
+                foreach (var window in _windowing.AllWindows)
+                {
+                    if (window.IsMainWindow)
+                        continue;
+
+                    _windowing.GLMakeContextCurrent(window);
+                    BlitThreadDoSecondaryWindowBlit(window);
+                }
+
+                _windowing.GLMakeContextCurrent(_windowing.MainWindow!);
+            }
+        }
+
+        private void BlitThreadDoSecondaryWindowBlit(WindowReg window)
+        {
+            var rt = window.RenderTexture!;
+
+            if (_hasGLFenceSync)
+            {
+                // 0xFFFFFFFFFFFFFFFFUL is GL_TIMEOUT_IGNORED
+                var sync = rt!.LastGLSync;
+                GL.WaitSync(sync, WaitSyncFlags.None, unchecked((long) 0xFFFFFFFFFFFFFFFFUL));
+                CheckGlError();
+            }
+
+            GL.Viewport(0, 0, window.FramebufferSize.X, window.FramebufferSize.Y);
+            CheckGlError();
+
+            SetTexture(TextureUnit.Texture0, window.RenderTexture!.Texture);
+
+            GL.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+            CheckGlError();
+
+            window.BlitDoneEvent?.Set();
+            _windowing!.WindowSwapBuffers(window);
+        }
+
+        private void BlitThreadInit(WindowReg reg)
+        {
+            _windowing!.GLMakeContextCurrent(reg);
+            _windowing.GLSwapInterval(0);
+
+            if (!_isGLES)
+                GL.Enable(EnableCap.FramebufferSrgb);
+
+            var vao = GL.GenVertexArray();
+            GL.BindVertexArray(vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, WindowVBO.ObjectHandle);
+            // Vertex Coords
+            GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, Vertex2D.SizeOf, 0);
+            GL.EnableVertexAttribArray(0);
+            // Texture Coords.
+            GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, Vertex2D.SizeOf, 2 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            var program = _compileProgram(_winBlitShaderVert, _winBlitShaderFrag, new (string, uint)[]
+            {
+                ("aPos", 0),
+                ("tCoord", 1),
+            }, includeLib: false);
+
+            GL.UseProgram(program.Handle);
+            var loc = GL.GetUniformLocation(program.Handle, "tex");
+            SetTexture(TextureUnit.Texture0, reg.RenderTexture!.Texture);
+            GL.Uniform1(loc, 0);
+        }
+
+        private void FenceRenderTarget(RenderTargetBase rt)
+        {
+            if (!_hasGLFenceSync || !rt.MakeGLFence)
+                return;
+
+            if (rt.LastGLSync != 0)
+                GL.DeleteSync(rt.LastGLSync);
+
+            rt.LastGLSync = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
         }
 
         [StructLayout(LayoutKind.Explicit)]
@@ -929,7 +1002,7 @@ namespace Robust.Client.Graphics.Clyde
             public Color Color;
         }
 
-        private enum RenderCommandType
+        private enum RenderCommandType : byte
         {
             DrawBatch,
 
@@ -1035,7 +1108,8 @@ namespace Robust.Client.Graphics.Clyde
             public readonly Matrix3 ViewMatrix;
             public readonly LoadedRenderTarget RenderTarget;
 
-            public FullStoredRendererState(in Matrix3 projMatrix, in Matrix3 viewMatrix, LoadedRenderTarget renderTarget)
+            public FullStoredRendererState(in Matrix3 projMatrix, in Matrix3 viewMatrix,
+                LoadedRenderTarget renderTarget)
             {
                 ProjMatrix = projMatrix;
                 ViewMatrix = viewMatrix;

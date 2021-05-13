@@ -1,13 +1,7 @@
-﻿using Robust.Server.GameObjects.Components.Container;
-using Robust.Server.GameObjects.Components.Markers;
-using Robust.Server.GameObjects.Components.UserInterface;
-using Robust.Server.Interfaces.GameObjects;
+using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Components;
-using Robust.Shared.GameObjects.Components.Map;
-using Robust.Shared.GameObjects.Components.Transform;
-using Robust.Shared.GameObjects.Components.UserInterface;
-using Robust.Shared.Interfaces.GameObjects.Components;
+
+using Robust.Shared.Physics;
 
 namespace Robust.Server.GameObjects
 {
@@ -29,39 +23,46 @@ namespace Robust.Server.GameObjects
             Register<MapGridComponent>();
             RegisterReference<MapGridComponent, IMapGridComponent>();
 
-            RegisterIgnore("Icon");
-            RegisterIgnore("Eye");
+            Register<EyeComponent>();
+            RegisterReference<EyeComponent, SharedEyeComponent>();
 
             Register<BasicActorComponent>();
             RegisterReference<BasicActorComponent, IActorComponent>();
 
-            Register<CollidableComponent>();
-            RegisterReference<CollidableComponent, ICollidableComponent>();
-            Register<PointLightComponent>();
-            Register<OccluderComponent>();
+            Register<PhysicsComponent>();
+            RegisterReference<PhysicsComponent, IPhysBody>();
 
-            RegisterIgnore("Input");
-            Register<SpriteComponent>();
+            Register<CollisionWakeComponent>();
 
             Register<ContainerManagerComponent>();
             RegisterReference<ContainerManagerComponent, IContainerManager>();
 
+            Register<OccluderComponent>();
+
+            RegisterIgnore("Input");
+            Register<SpriteComponent>();
+            RegisterReference<SpriteComponent, SharedSpriteComponent>();
+            RegisterReference<SpriteComponent, ISpriteRenderableComponent>();
+
             Register<AppearanceComponent>();
+            RegisterReference<AppearanceComponent, SharedAppearanceComponent>();
+
             Register<SnapGridComponent>();
 
             Register<ServerUserInterfaceComponent>();
             RegisterReference<ServerUserInterfaceComponent, SharedUserInterfaceComponent>();
 
-            Register<IgnorePauseComponent>();
+            Register<TimerComponent>();
 
             RegisterIgnore("AnimationPlayer");
 
 #if DEBUG
             Register<DebugExceptionOnAddComponent>();
-            Register<DebugExceptionExposeDataComponent>();
             Register<DebugExceptionInitializeComponent>();
             Register<DebugExceptionStartupComponent>();
 #endif
+
+            Register<MapSaveIdComponent>();
         }
     }
 }

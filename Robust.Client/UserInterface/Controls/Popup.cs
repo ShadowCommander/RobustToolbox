@@ -21,18 +21,28 @@ namespace Robust.Client.UserInterface.Controls
                 UserInterfaceManagerInternal.RemoveModal(this);
             }
 
-            if (box != null && _desiredSize != box.Value.Size)
+            if (box != null &&
+                (_desiredSize != box.Value.Size ||
+                 PopupContainer.GetPopupOrigin(this) != box.Value.TopLeft ||
+                 PopupContainer.GetAltOrigin(this) != altPos))
             {
                 PopupContainer.SetPopupOrigin(this, box.Value.TopLeft);
                 PopupContainer.SetAltOrigin(this, altPos);
 
                 _desiredSize = box.Value.Size;
-                MinimumSizeChanged();
+                InvalidateMeasure();
             }
 
             Visible = true;
             UserInterfaceManagerInternal.PushModal(this);
         }
+
+        public void Close()
+        {
+            if (!Visible) return;
+            UserInterfaceManagerInternal.RemoveModal(this);
+        }
+
 
         protected internal override void ModalRemoved()
         {
@@ -42,9 +52,11 @@ namespace Robust.Client.UserInterface.Controls
             OnPopupHide?.Invoke();
         }
 
-        protected override Vector2 CalculateMinimumSize()
+        protected override Vector2 MeasureOverride(Vector2 availableSize)
         {
-            return Vector2.ComponentMax(_desiredSize, base.CalculateMinimumSize());
+            return Vector2.ComponentMax(
+                _desiredSize,
+                base.MeasureOverride(Vector2.ComponentMax(availableSize, _desiredSize)));
         }
     }
 }

@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using Robust.Client.Interfaces.UserInterface;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Client.UserInterface
@@ -39,9 +38,9 @@ namespace Robust.Client.UserInterface
             }
         }
 
-        private readonly Dictionary<string, object> _styleProperties = new Dictionary<string, object>();
-        private readonly HashSet<string> _styleClasses = new HashSet<string>();
-        private readonly HashSet<string> _stylePseudoClass = new HashSet<string>();
+        private readonly Dictionary<string, object> _styleProperties = new();
+        private readonly HashSet<string> _styleClasses = new();
+        private readonly HashSet<string> _stylePseudoClass = new();
 
         // Styling needs to be updated.
         private bool _stylingDirty;
@@ -234,7 +233,7 @@ namespace Robust.Client.UserInterface
 
         protected virtual void StylePropertiesChanged()
         {
-            MinimumSizeChanged();
+            InvalidateMeasure();
         }
 
         public void ForceRunStyleUpdate()

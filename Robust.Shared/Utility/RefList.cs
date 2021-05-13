@@ -33,7 +33,7 @@ namespace Robust.Shared.Utility
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Enumerator GetEnumerator()
         {
-            return new Enumerator(this);
+            return new(this);
         }
 
         IEnumerator<T> IEnumerable<T>.GetEnumerator()
@@ -101,6 +101,8 @@ namespace Robust.Shared.Utility
 
         public int Count => _size;
         public bool IsReadOnly => false;
+        public int Capacity => _array.Length;
+
         public int IndexOf(T item)
         {
             return Array.IndexOf(_array, item, 0, _size);
@@ -117,6 +119,17 @@ namespace Robust.Shared.Utility
 
             _array[index] = item;
             _size++;
+        }
+
+        public void TrimCapacity(int capacity)
+        {
+            if (Count > capacity)
+                throw new ArgumentException("Cannot trim past list contents");
+
+            var oldArr = _array;
+            _array = new T[capacity];
+
+            oldArr.AsSpan(0, _size).CopyTo(_array);
         }
 
         public void RemoveAt(int index)
@@ -159,7 +172,7 @@ namespace Robust.Shared.Utility
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Span<T> GetSpan()
         {
-            return new Span<T>(_array, 0, _size);
+            return new(_array, 0, _size);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

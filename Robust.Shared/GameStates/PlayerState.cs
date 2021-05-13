@@ -2,7 +2,6 @@
 using System;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Players;
 using Robust.Shared.Network;
 
 #nullable disable
@@ -12,7 +11,7 @@ namespace Robust.Shared.GameStates
     [Serializable, NetSerializable]
     public sealed class PlayerState
     {
-        public NetSessionId SessionId { get; set; }
+        public NetUserId UserId { get; set; }
 
         public string Name { get; set; }
         public SessionStatus Status { get; set; }

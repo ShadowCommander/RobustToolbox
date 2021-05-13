@@ -3,7 +3,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
-using Robust.Shared.Interfaces.Timing;
 using Robust.Shared.Log;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
@@ -15,14 +14,14 @@ namespace Robust.Client.GameStates
     {
         private readonly IGameTiming _timing;
 
-        private readonly List<GameState> _stateBuffer = new List<GameState>();
+        private readonly List<GameState> _stateBuffer = new();
         private GameState? _lastFullState;
         private bool _waitingForFull = true;
         private int _interpRatio;
         private GameTick _highestFromSequence;
 
         private readonly Dictionary<EntityUid, Dictionary<uint, ComponentState>> _lastStateFullRep
-            = new Dictionary<EntityUid, Dictionary<uint, ComponentState>>();
+            = new();
 
         /// <inheritdoc />
         public int MinBufferSize => Interpolation ? 3 : 2;

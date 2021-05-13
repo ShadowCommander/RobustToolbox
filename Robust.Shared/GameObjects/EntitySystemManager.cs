@@ -3,40 +3,54 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.GameObjects.Systems;
-using Robust.Shared.Interfaces.Reflection;
+using Prometheus;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
+using Robust.Shared.Reflection;
+using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.GameObjects
 {
     public class EntitySystemManager : IEntitySystemManager
     {
+        private static readonly Histogram _tickUsageHistogram = Metrics.CreateHistogram("robust_entity_systems_update_usage",
+            "Amount of time spent processing each entity system", new HistogramConfiguration
+            {
+                LabelNames = new[] {"system"},
+                Buckets = Histogram.ExponentialBuckets(0.000_001, 1.5, 25)
+            });
+
 #pragma warning disable 649
         [Dependency] private readonly IReflectionManager _reflectionManager = default!;
-        [Dependency] private readonly IDynamicTypeFactory _typeFactory = default!;
+        [Dependency] private readonly IDynamicTypeFactoryInternal _typeFactory = default!;
         [Dependency] private readonly IEntityManager _entityManager = default!;
 #pragma warning restore 649
 
-        private readonly List<Type> _extraLoadedTypes = new List<Type>();
+        [ViewVariables]
+        private readonly List<Type> _extraLoadedTypes = new();
+
+        private readonly Stopwatch _stopwatch = new();
 
         /// <summary>
         /// Maps system types to instances.
         /// </summary>
-        private readonly Dictionary<Type, IEntitySystem> _systems = new Dictionary<Type, IEntitySystem>();
+        [ViewVariables]
+        private readonly Dictionary<Type, IEntitySystem> _systems = new();
         /// <summary>
         /// Maps system supertypes to instances.
         /// </summary>
-        private readonly Dictionary<Type, IEntitySystem> _supertypeSystems = new Dictionary<Type, IEntitySystem>();
+        [ViewVariables]
+        private readonly Dictionary<Type, IEntitySystem> _supertypeSystems = new();
 
         private bool _initialized;
 
-        private readonly List<IEntitySystem> _updateOrder = new List<IEntitySystem>();
+        [ViewVariables] private UpdateReg[] _updateOrder = Array.Empty<UpdateReg>();
+        [ViewVariables] private IEntitySystem[] _frameUpdateOrder = Array.Empty<IEntitySystem>();
 
-        [ViewVariables]
-        private IReadOnlyCollection<IEntitySystem> AllSystems => _systems.Values;
+        [ViewVariables] public IReadOnlyCollection<IEntitySystem> AllSystems => _systems.Values;
+
+        public bool MetricsEnabled { get; set; }
 
         /// <inheritdoc />
         public event EventHandler<SystemChangedArgs>? SystemLoaded;
@@ -66,7 +80,7 @@ namespace Robust.Shared.GameObjects
         }
 
         /// <inheritdoc />
-        public bool TryGetEntitySystem<T>([MaybeNullWhen(false)] out T entitySystem)
+        public bool TryGetEntitySystem<T>([NotNullWhen(true)] out T? entitySystem)
             where T : IEntitySystem
         {
             if (_systems.TryGetValue(typeof(T), out var system))
@@ -88,13 +102,13 @@ namespace Robust.Shared.GameObjects
         /// <inheritdoc />
         public void Initialize()
         {
-            HashSet<Type> excludedTypes = new HashSet<Type>();
+            HashSet<Type> excludedTypes = new();
 
             foreach (var type in _reflectionManager.GetAllChildren<IEntitySystem>().Concat(_extraLoadedTypes))
             {
                 Logger.DebugS("go.sys", "Initializing entity system {0}", type);
                 // Force IoC inject of all systems
-                var instance = _typeFactory.CreateInstance<IEntitySystem>(type);
+                var instance = _typeFactory.CreateInstanceUnchecked<IEntitySystem>(type);
 
                 _systems.Add(type, instance);
 
@@ -127,22 +141,40 @@ namespace Robust.Shared.GameObjects
             }
 
             // Create update order for entity systems.
-            _updateOrder.AddRange(CalculateUpdateOrder(_systems.Values));
+            var (fUpdate, update) = CalculateUpdateOrder(_systems.Values, _supertypeSystems);
+
+            _frameUpdateOrder = fUpdate.ToArray();
+            _updateOrder = update
+                .Select(s => new UpdateReg
+                {
+                    System = s,
+                    Monitor = _tickUsageHistogram.WithLabels(s.GetType().Name)
+                })
+                .ToArray();
 
             _initialized = true;
         }
 
-        private static IEnumerable<IEntitySystem> CalculateUpdateOrder(Dictionary<Type, IEntitySystem>.ValueCollection systems)
+        private static (IEnumerable<IEntitySystem> frameUpd, IEnumerable<IEntitySystem> upd)
+            CalculateUpdateOrder(
+                Dictionary<Type, IEntitySystem>.ValueCollection systems,
+                Dictionary<Type, IEntitySystem> supertypeSystems)
         {
-            var allNodes = new List<GraphNode>();
-            var typeToNode = new Dictionary<Type, GraphNode>();
+            var allNodes = new List<GraphNode<IEntitySystem>>();
+            var typeToNode = new Dictionary<Type, GraphNode<IEntitySystem>>();
 
             foreach (var system in systems)
             {
-                var node = new GraphNode(system);
+                var node = new GraphNode<IEntitySystem>(system);
 
                 allNodes.Add(node);
                 typeToNode.Add(system.GetType(), node);
+            }
+
+            foreach (var (type, system) in supertypeSystems)
+            {
+                var node = typeToNode[system.GetType()];
+                typeToNode[type] = node;
             }
 
             foreach (var node in allNodes)
@@ -162,13 +194,17 @@ namespace Robust.Shared.GameObjects
                 }
             }
 
-            return TopologicalSort(allNodes).Select(p => p.System);
+            var order = TopologicalSort(allNodes).Select(p => p.System).ToArray();
+            var frameUpdate = order.Where(p => NeedsFrameUpdate(p.GetType()));
+            var update = order.Where(p => NeedsUpdate(p.GetType()));
+
+            return (frameUpdate, update);
         }
 
-        private static IEnumerable<GraphNode> TopologicalSort(IEnumerable<GraphNode> nodes)
+        internal static IEnumerable<GraphNode<T>> TopologicalSort<T>(IEnumerable<GraphNode<T>> nodes)
         {
             var elems = nodes.ToDictionary(node => node,
-                node => new HashSet<GraphNode>(node.DependsOn));
+                node => new HashSet<GraphNode<T>>(node.DependsOn));
             while (elems.Count > 0)
             {
                 var elem =
@@ -208,21 +244,26 @@ namespace Robust.Shared.GameObjects
             }
 
             _systems.Clear();
-            _updateOrder.Clear();
+            _updateOrder = Array.Empty<UpdateReg>();
+            _frameUpdateOrder = Array.Empty<IEntitySystem>();
             _supertypeSystems.Clear();
             _initialized = false;
         }
 
         /// <inheritdoc />
-        public void Update(float frameTime)
+        public void TickUpdate(float frameTime)
         {
-            foreach (var system in _updateOrder)
+            foreach (var updReg in _updateOrder)
             {
+                if (MetricsEnabled)
+                {
+                    _stopwatch.Restart();
+                }
 #if EXCEPTION_TOLERANCE
                 try
                 {
 #endif
-                system.Update(frameTime);
+                    updReg.System.Update(frameTime);
 #if EXCEPTION_TOLERANCE
                 }
                 catch (Exception e)
@@ -230,13 +271,18 @@ namespace Robust.Shared.GameObjects
                     Logger.ErrorS("entsys", e.ToString());
                 }
 #endif
+
+                if (MetricsEnabled)
+                {
+                    updReg.Monitor.Observe(_stopwatch.Elapsed.TotalSeconds);
+                }
             }
         }
 
         /// <inheritdoc />
         public void FrameUpdate(float frameTime)
         {
-            foreach (var system in _updateOrder)
+            foreach (var system in _frameUpdateOrder)
             {
 #if EXCEPTION_TOLERANCE
                 try
@@ -264,15 +310,54 @@ namespace Robust.Shared.GameObjects
             _extraLoadedTypes.Add(typeof(T));
         }
 
-        [DebuggerDisplay("GraphNode: {" + nameof(System) + "}")]
-        private sealed class GraphNode
+        private static bool NeedsUpdate(Type type)
         {
-            public readonly IEntitySystem System;
-            public readonly List<GraphNode> DependsOn = new List<GraphNode>();
+            if (!typeof(EntitySystem).IsAssignableFrom(type))
+            {
+                return true;
+            }
 
-            public GraphNode(IEntitySystem system)
+            var mUpdate = type.GetMethod(nameof(EntitySystem.Update), new[] {typeof(float)});
+
+            DebugTools.AssertNotNull(mUpdate);
+
+            return mUpdate!.DeclaringType != typeof(EntitySystem);
+        }
+
+        private static bool NeedsFrameUpdate(Type type)
+        {
+            if (!typeof(EntitySystem).IsAssignableFrom(type))
+            {
+                return true;
+            }
+
+            var mFrameUpdate = type.GetMethod(nameof(EntitySystem.FrameUpdate), new[] {typeof(float)});
+
+            DebugTools.AssertNotNull(mFrameUpdate);
+
+            return mFrameUpdate!.DeclaringType != typeof(EntitySystem);
+        }
+
+        [DebuggerDisplay("GraphNode: {" + nameof(System) + "}")]
+        internal sealed class GraphNode<T>
+        {
+            public readonly T System;
+            public readonly List<GraphNode<T>> DependsOn = new();
+
+            public GraphNode(T system)
             {
                 System = system;
+            }
+        }
+
+        private struct UpdateReg
+        {
+            [ViewVariables] public IEntitySystem System;
+            [ViewVariables] public Histogram.Child Monitor;
+
+            public override string? ToString()
+            {
+                return System.ToString();
             }
         }
     }

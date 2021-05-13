@@ -1,19 +1,15 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Robust.Server.Interfaces;
 using Robust.Shared.ContentPack;
-using Robust.Shared.Interfaces.Log;
-using Robust.Shared.Interfaces.Reflection;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
-using Robust.Shared;
 using Robust.Shared.Asynchronous;
+using Robust.Shared.Reflection;
 
 namespace Robust.Server
 {
@@ -66,10 +62,7 @@ namespace Robust.Server
 
             var server = IoCManager.Resolve<IBaseServerInternal>();
 
-            // When the game is ran with the startup executable being content,
-            // we have to disable the separate load context.
-            // Otherwise the content assemblies will be loaded twice which causes *many* fun bugs.
-            server.DisableLoadContext = contentStart;
+            server.ContentStart = contentStart;
             server.SetCommandLineArgs(args);
 
             Logger.Info("Server -> Starting");
@@ -83,8 +76,6 @@ namespace Robust.Server
 
             string strVersion = Assembly.GetExecutingAssembly().GetName().Version!.ToString();
             Logger.Info("Server Version " + strVersion + " -> Ready");
-
-            IoCManager.Resolve<ISignalHandler>().MaybeStart();
 
             server.MainLoop();
 
@@ -121,7 +112,8 @@ namespace Robust.Server
             mgr.RootSawmill.AddHandler(handler);
             mgr.GetSawmill("res.typecheck").Level = LogLevel.Info;
             mgr.GetSawmill("go.sys").Level = LogLevel.Info;
-            mgr.GetSawmill("szr").Level = LogLevel.Info;
+            mgr.GetSawmill("loc").Level = LogLevel.Error;
+            // mgr.GetSawmill("szr").Level = LogLevel.Info;
 
 #if DEBUG_ONLY_FCE_INFO
 #if DEBUG_ONLY_FCE_LOG

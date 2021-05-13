@@ -7,12 +7,12 @@ namespace Robust.Server.ViewVariables.Traits
 {
     internal sealed class ViewVariablesTraitEnumerable : ViewVariablesTrait
     {
-        private readonly List<object?> _cache = new List<object?>();
+        private readonly List<object?> _cache = new();
         private IEnumerator? _enumerator;
         private readonly IEnumerable _enumerable;
         private bool Ended => _enumerator == null;
 
-        public ViewVariablesTraitEnumerable(ViewVariablesSession session) : base(session)
+        public ViewVariablesTraitEnumerable(IViewVariablesSession session) : base(session)
         {
             _enumerable = (IEnumerable) session.Object;
             _refresh();

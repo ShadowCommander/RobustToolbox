@@ -10,20 +10,16 @@ using System.Threading.Tasks;
 using Moq;
 using NUnit.Framework;
 using Robust.Client;
-using Robust.Client.Interfaces;
 using Robust.Server;
 using Robust.Server.Console;
-using Robust.Server.Interfaces;
-using Robust.Server.Interfaces.Console;
-using Robust.Server.Interfaces.ServerStatus;
+using Robust.Server.ServerStatus;
+using Robust.Shared;
+using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
-using Robust.Shared.Interfaces.Configuration;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Resources;
-using Robust.Shared.Interfaces.Timing;
 using Robust.Shared.IoC;
+using Robust.Shared.Log;
+using Robust.Shared.Network;
 using Robust.Shared.Timing;
-using FrameEventArgs = Robust.Shared.Timing.FrameEventArgs;
 using ServerProgram = Robust.Server.Program;
 
 namespace Robust.UnitTesting
@@ -37,7 +33,7 @@ namespace Robust.UnitTesting
     /// </remarks>
     public abstract partial class RobustIntegrationTest
     {
-        private readonly List<IntegrationInstance> _integrationInstances = new List<IntegrationInstance>();
+        private readonly List<IntegrationInstance> _integrationInstances = new();
 
         /// <summary>
         ///     Start an instance of the server and return an object that can be used to control it.
@@ -325,8 +321,9 @@ namespace Robust.UnitTesting
                     IoCManager.Register<IServerNetManager, IntegrationNetManager>(true);
                     IoCManager.Register<IntegrationNetManager, IntegrationNetManager>(true);
                     IoCManager.Register<ISystemConsoleManager, SystemConsoleManagerDummy>(true);
-                    IoCManager.Register<IModLoader, ModLoader>(true);
-                    IoCManager.Register<ModLoader, ModLoader>(true);
+                    IoCManager.Register<IModLoader, TestingModLoader>(true);
+                    IoCManager.Register<IModLoaderInternal, TestingModLoader>(true);
+                    IoCManager.Register<TestingModLoader, TestingModLoader>(true);
                     IoCManager.RegisterInstance<IStatusHost>(new Mock<IStatusHost>().Object, true);
                     _options?.InitIoC?.Invoke();
                     IoCManager.BuildGraph();
@@ -337,21 +334,17 @@ namespace Robust.UnitTesting
 
                     server.LoadConfigAndUserData = false;
 
-                    if (_options?.ServerContentAssembly != null)
+                    if (_options?.ContentAssemblies != null)
                     {
-                        IoCManager.Resolve<ModLoader>().ServerContentAssembly = _options.ServerContentAssembly;
+                        IoCManager.Resolve<TestingModLoader>().Assemblies = _options.ContentAssemblies;
                     }
 
-                    if (_options?.SharedContentAssembly != null)
-                    {
-                        IoCManager.Resolve<ModLoader>().SharedContentAssembly = _options.SharedContentAssembly;
-                    }
+                    var cfg = IoCManager.Resolve<IConfigurationManagerInternal>();
 
                     if (_options != null)
                     {
                         _options.BeforeStart?.Invoke();
-                        IoCManager.Resolve<IConfigurationManager>()
-                            .OverrideConVars(_options.CVarOverrides.Select(p => (p.Key, p.Value)));
+                        cfg.OverrideConVars(_options.CVarOverrides.Select(p => (p.Key, p.Value)));
 
                         if (_options.ExtraPrototypes != null)
                         {
@@ -360,10 +353,11 @@ namespace Robust.UnitTesting
                         }
                     }
 
-                    IoCManager.Resolve<IConfigurationManager>()
-                        .OverrideConVars(new []{("log.runtimelog", "false")});
+                    cfg.OverrideConVars(new []{("log.runtimelog", "false"), (CVars.SysWinTickPeriod.Name, "-1")});
 
-                    if (server.Start(() => new TestLogHandler("SERVER")))
+                    var failureLevel = _options == null ? LogLevel.Error : _options.FailureLogLevel;
+                    server.ContentStart = _options?.ContentStart ?? false;
+                    if (server.Start(() => new TestLogHandler("SERVER", failureLevel)))
                     {
                         throw new Exception("Server failed to start.");
                     }
@@ -422,8 +416,9 @@ namespace Robust.UnitTesting
                     IoCManager.Register<INetManager, IntegrationNetManager>(true);
                     IoCManager.Register<IClientNetManager, IntegrationNetManager>(true);
                     IoCManager.Register<IntegrationNetManager, IntegrationNetManager>(true);
-                    IoCManager.Register<IModLoader, ModLoader>(true);
-                    IoCManager.Register<ModLoader, ModLoader>(true);
+                    IoCManager.Register<IModLoader, TestingModLoader>(true);
+                    IoCManager.Register<IModLoaderInternal, TestingModLoader>(true);
+                    IoCManager.Register<TestingModLoader, TestingModLoader>(true);
                     _options?.InitIoC?.Invoke();
                     IoCManager.BuildGraph();
 
@@ -431,23 +426,19 @@ namespace Robust.UnitTesting
 
                     var client = DependencyCollection.Resolve<IGameControllerInternal>();
 
-                    if (_options?.ClientContentAssembly != null)
+                    if (_options?.ContentAssemblies != null)
                     {
-                        IoCManager.Resolve<ModLoader>().ClientContentAssembly = _options.ClientContentAssembly;
-                    }
-
-                    if (_options?.SharedContentAssembly != null)
-                    {
-                        IoCManager.Resolve<ModLoader>().SharedContentAssembly = _options.SharedContentAssembly;
+                        IoCManager.Resolve<TestingModLoader>().Assemblies = _options.ContentAssemblies;
                     }
 
                     client.LoadConfigAndUserData = false;
 
+                    var cfg = IoCManager.Resolve<IConfigurationManagerInternal>();
+
                     if (_options != null)
                     {
                         _options.BeforeStart?.Invoke();
-                        IoCManager.Resolve<IConfigurationManager>()
-                            .OverrideConVars(_options.CVarOverrides.Select(p => (p.Key, p.Value)));
+                        cfg.OverrideConVars(_options.CVarOverrides.Select(p => (p.Key, p.Value)));
 
                         if (_options.ExtraPrototypes != null)
                         {
@@ -456,12 +447,15 @@ namespace Robust.UnitTesting
                         }
                     }
 
-                    client.Startup(() => new TestLogHandler("CLIENT"));
+                    cfg.OverrideConVars(new []{(CVars.NetPredictLagBias.Name, "0")});
 
                     var gameLoop = new IntegrationGameLoop(DependencyCollection.Resolve<IGameTiming>(),
                         _fromInstanceWriter, _toInstanceReader);
+
+                    var failureLevel = _options == null ? LogLevel.Error : _options.FailureLogLevel;
                     client.OverrideMainLoop(gameLoop);
-                    client.MainLoop(GameController.DisplayMode.Headless);
+                    client.ContentStart = true;
+                    client.Run(GameController.DisplayMode.Headless, () => new TestLogHandler("CLIENT", failureLevel));
                 }
                 catch (Exception e)
                 {
@@ -509,8 +503,6 @@ namespace Robust.UnitTesting
                 // Ack tick message 1 is implied as "init done"
                 _channelWriter.TryWrite(new AckTicksMessage(1));
                 Running = true;
-
-                Tick += (a, b) => Console.WriteLine("tick: {0}", _gameTiming.CurTick);
 
                 _gameTiming.InSimulation = true;
 
@@ -562,22 +554,22 @@ namespace Robust.UnitTesting
 
         public class ServerIntegrationOptions : IntegrationOptions
         {
-            public Assembly? ServerContentAssembly { get; set; }
         }
 
         public class ClientIntegrationOptions : IntegrationOptions
         {
-            public Assembly? ClientContentAssembly { get; set; }
         }
 
         public abstract class IntegrationOptions
         {
             public Action? InitIoC { get; set; }
             public Action? BeforeStart { get; set; }
-            public Assembly? SharedContentAssembly { get; set; }
+            public Assembly[]? ContentAssemblies { get; set; }
             public string? ExtraPrototypes { get; set; }
+            public LogLevel? FailureLogLevel { get; set; } = LogLevel.Error;
+            public bool ContentStart { get; set; } = false;
 
-            public Dictionary<string, string> CVarOverrides { get; } = new Dictionary<string, string>();
+            public Dictionary<string, string> CVarOverrides { get; } = new();
         }
 
         /// <summary>

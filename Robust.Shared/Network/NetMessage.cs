@@ -1,6 +1,5 @@
 ﻿using System;
 using Lidgren.Network;
-using Robust.Shared.Interfaces.Network;
 
 #nullable disable
 
@@ -9,7 +8,7 @@ namespace Robust.Shared.Network
     /// <summary>
     /// The group the message belongs to, used for statistics and packet channels.
     /// </summary>
-    public enum MsgGroups
+    public enum MsgGroups : byte
     {
         /// <summary>
         /// Error state, the message needs to set a different one.
@@ -99,9 +98,9 @@ namespace Robust.Shared.Network
                     case MsgGroups.Entity:
                         return NetDeliveryMethod.Unreliable;
                     case MsgGroups.Core:
-                    case MsgGroups.String:
                     case MsgGroups.Command:
                         return NetDeliveryMethod.ReliableUnordered;
+                    case MsgGroups.String:
                     case MsgGroups.EntityEvent:
                         return NetDeliveryMethod.ReliableOrdered;
                     default:

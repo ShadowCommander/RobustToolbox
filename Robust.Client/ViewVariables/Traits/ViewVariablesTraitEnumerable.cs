@@ -16,7 +16,7 @@ namespace Robust.Client.ViewVariables.Traits
     internal class ViewVariablesTraitEnumerable : ViewVariablesTrait
     {
         private const int ElementsPerPage = 25;
-        private readonly List<object?> _cache = new List<object?>();
+        private readonly List<object?> _cache = new();
         private int _page;
         private IEnumerator? _enumerator;
         private bool _ended;
@@ -50,13 +50,13 @@ namespace Robust.Client.ViewVariables.Traits
             var outerVBox = new VBoxContainer();
             _controlsHBox = new HBoxContainer
             {
-                SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter
+                HorizontalAlignment = Control.HAlignment.Center
             };
 
             {
                 // Page navigational controls.
                 _leftButton = new Button {Text = "<<", Disabled = true};
-                _pageLabel = new LineEdit {Text = "0", CustomMinimumSize = (60, 0)};
+                _pageLabel = new LineEdit {Text = "0", MinSize = (60, 0)};
                 _rightButton = new Button {Text = ">>"};
 
                 _leftButton.OnPressed += _leftButtonPressed;
@@ -150,10 +150,10 @@ namespace Robust.Client.ViewVariables.Traits
             for (var i = page * ElementsPerPage; i < ElementsPerPage * (page + 1) && i < _cache.Count; i++)
             {
                 var element = _cache[i];
-                ViewVariablesPropertyEditor editor;
+                VVPropEditor editor;
                 if (element == null)
                 {
-                    editor = new ViewVariablesPropertyEditorDummy();
+                    editor = new VVPropEditorDummy();
                 }
                 else
                 {

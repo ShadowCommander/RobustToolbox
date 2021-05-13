@@ -1,5 +1,4 @@
-﻿using Robust.Shared.Interfaces.Log;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using Serilog;
@@ -37,8 +36,8 @@ namespace Robust.Shared.Log
 
             private LogLevel? _level = null;
 
-            public List<ILogHandler> Handlers { get; } = new List<ILogHandler>();
-            private readonly ReaderWriterLockSlim _handlerLock = new ReaderWriterLockSlim();
+            public List<ILogHandler> Handlers { get; } = new();
+            private readonly ReaderWriterLockSlim _handlerLock = new();
 
             public Sawmill(Sawmill? parent, string name)
             {

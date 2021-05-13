@@ -4,22 +4,22 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using JetBrains.Annotations;
-using Robust.Shared.Interfaces.Resources;
+using Robust.Shared.ContentPack;
 using Robust.Shared.Utility;
 
-namespace Robust.Client.Graphics.Shaders
+namespace Robust.Client.Graphics
 {
     internal sealed partial class ShaderParser
     {
         private readonly IResourceManager _resManager;
         private int _tokenIndex;
-        private readonly List<Token> _tokens = new List<Token>();
+        private readonly List<Token> _tokens = new();
 
-        private readonly List<ShaderUniformDefinition> _uniformsParsing = new List<ShaderUniformDefinition>();
-        private readonly List<ShaderConstantDefinition> _constantsParsing = new List<ShaderConstantDefinition>();
-        private readonly List<ShaderVaryingDefinition> _varyingsParsing = new List<ShaderVaryingDefinition>();
-        private readonly List<ShaderFunctionDefinition> _functionsParsing = new List<ShaderFunctionDefinition>();
-        private readonly LinkedList<ResourcePath> _includes = new LinkedList<ResourcePath>();
+        private readonly List<ShaderUniformDefinition> _uniformsParsing = new();
+        private readonly List<ShaderConstantDefinition> _constantsParsing = new();
+        private readonly List<ShaderVaryingDefinition> _varyingsParsing = new();
+        private readonly List<ShaderFunctionDefinition> _functionsParsing = new();
+        private readonly LinkedList<ResourcePath> _includes = new();
 
         public static ParsedShader Parse(TextReader reader, IResourceManager resManager)
         {
@@ -196,15 +196,9 @@ namespace Robust.Client.Graphics.Shaders
 
         private void _parseFunction()
         {
+            var retType = _parseShaderType();
+
             var token = _takeToken();
-            if (!(token is TokenWord typeToken))
-            {
-                throw new ShaderParseException("Expected type.", token?.Position);
-            }
-
-            var retType = _parseShaderType(typeToken);
-
-            token = _takeToken();
             if (!(token is TokenWord nameToken))
             {
                 throw new ShaderParseException("Expected function name.", token?.Position);
@@ -268,7 +262,8 @@ namespace Robust.Client.Graphics.Shaders
                         paramTypeToken = paramTypeTokenForReal;
                     }
 
-                    var paramType = _parseShaderType(paramTypeToken);
+                    _revToken();
+                    var paramType = _parseShaderType();
 
                     token = _takeToken();
                     if (!(token is TokenWord paramNameToken))
@@ -344,13 +339,7 @@ namespace Robust.Client.Graphics.Shaders
         private void _parseUniform()
         {
             _takeToken();
-            var typeToken = _takeToken();
-            if (!(typeToken is TokenWord wordType))
-            {
-                throw new ShaderParseException("Expected type.", typeToken?.Position);
-            }
-
-            var type = _parseShaderType(wordType);
+            var type = _parseShaderType();
 
             var nameToken = _takeToken();
             if (!(nameToken is TokenWord wordName))
@@ -406,13 +395,7 @@ namespace Robust.Client.Graphics.Shaders
         private void ParseConstant()
         {
             _takeToken();
-            var typeToken = _takeToken();
-            if (!(typeToken is TokenWord wordType))
-            {
-                throw new ShaderParseException("Expected type.", typeToken?.Position);
-            }
-
-            var type = _parseShaderType(wordType);
+            var type = _parseShaderType();
 
             var nameToken = _takeToken();
             if (!(nameToken is TokenWord wordName))
@@ -454,13 +437,7 @@ namespace Robust.Client.Graphics.Shaders
         private void _parseVarying()
         {
             _takeToken();
-            var typeToken = _takeToken();
-            if (!(typeToken is TokenWord wordType))
-            {
-                throw new ShaderParseException("Expected type.", typeToken?.Position);
-            }
-
-            var type = _parseShaderType(wordType);
+            var type = _parseShaderType();
 
             var nameToken = _takeToken();
             if (!(nameToken is TokenWord wordName))
@@ -502,19 +479,57 @@ namespace Robust.Client.Graphics.Shaders
             return _tokens[_tokenIndex++];
         }
 
-        private static ShaderDataType _parseShaderType(TokenWord word)
+        private void _revToken()
         {
-            if (_shaderTypeMap.TryGetValue(word.Word, out var ret))
+            if (_tokenIndex == 0)
             {
-                return ret;
+                throw new ShaderParseException("Managed to get parser to reverse off of the start");
             }
+            _tokenIndex--;
+        }
 
-            throw new ShaderParseException("Expected <type>", word.Position);
+        private ShaderDataTypeFull _parseShaderType()
+        {
+            var precision = ShaderPrecisionQualifier.None;
+            while (true) {
+                var typeToken = _takeToken();
+                if (!(typeToken is TokenWord wordType))
+                {
+                    throw new ShaderParseException("Expected type or precision", typeToken?.Position);
+                }
+
+                if (_shaderTypePrecisionMap.TryGetValue(wordType.Word, out var tmprc))
+                {
+                    precision = tmprc;
+                    continue;
+                }
+
+                if (_shaderTypeMap.TryGetValue(wordType.Word, out var ret))
+                {
+                    var result = new ShaderDataTypeFull(ret, precision);
+                    if (!result.TypePrecisionConsistent())
+                    {
+                        throw new ShaderParseException($"Type {ret} cannot accept precision {precision}", wordType.Position);
+                    }
+                    return result;
+                }
+
+                throw new ShaderParseException("Expected type or precision", wordType.Position);
+            }
         }
 
         [SuppressMessage("ReSharper", "StringLiteralTypo")]
+        private static readonly Dictionary<string, ShaderPrecisionQualifier> _shaderTypePrecisionMap =
+            new()
+            {
+                {"lowp", ShaderPrecisionQualifier.Low},
+                {"mediump", ShaderPrecisionQualifier.Medium},
+                {"highp", ShaderPrecisionQualifier.High}
+            };
+
+        [SuppressMessage("ReSharper", "StringLiteralTypo")]
         private static readonly Dictionary<string, ShaderDataType> _shaderTypeMap =
-            new Dictionary<string, ShaderDataType>
+            new()
             {
                 {"void", ShaderDataType.Void},
                 {"bool", ShaderDataType.Bool},
@@ -579,7 +594,7 @@ namespace Robust.Client.Graphics.Shaders
 
             public override string ToString()
             {
-                return $"({LineStart}:{LineEnd}:{ColumnStart}:{ColumnEnd})";
+                return $"({FileName}:{LineStart}:{LineEnd}:{ColumnStart}:{ColumnEnd})";
             }
         }
     }

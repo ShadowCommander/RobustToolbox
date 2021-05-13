@@ -1,12 +1,10 @@
-﻿using Robust.Server.Interfaces.Player;
-using Robust.Shared.GameStates;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Server.GameObjects;
 using System;
+using Robust.Server.GameObjects;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.Network;
+using Robust.Shared.GameStates;
 using Robust.Shared.Network;
+using Robust.Shared.Players;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Server.Player
@@ -22,12 +20,13 @@ namespace Robust.Server.Player
         public PlayerSession(PlayerManager playerManager, INetChannel client, PlayerData data)
         {
             _playerManager = playerManager;
-            SessionId = client.SessionId;
+            UserId = client.UserId;
+            Name = client.UserName;
             _data = data;
 
             PlayerState = new PlayerState
             {
-                SessionId = client.SessionId,
+                UserId = client.UserId,
             };
 
             ConnectedClient = client;
@@ -44,11 +43,32 @@ namespace Robust.Server.Player
         private SessionStatus _status = SessionStatus.Connecting;
 
         /// <inheritdoc />
-        public string Name => SessionId.Username;
+
+        [ViewVariables]
+        internal string Name { get; set; }
 
         /// <inheritdoc />
+        string ICommonSession.Name
+        {
+            get => this.Name;
+            set => this.Name = value;
+        }
+
         [ViewVariables]
-        public SessionStatus Status
+        internal short Ping
+        {
+            get => ConnectedClient.Ping;
+            set => throw new NotSupportedException();
+        }
+
+        short ICommonSession.Ping
+        {
+            get => this.Ping;
+            set => this.Ping = value;
+        }
+
+        [ViewVariables]
+        internal SessionStatus Status
         {
             get => _status;
             set
@@ -65,6 +85,13 @@ namespace Robust.Server.Player
         }
 
         /// <inheritdoc />
+        SessionStatus ICommonSession.Status
+        {
+            get => this.Status;
+            set => this.Status = value;
+        }
+
+        /// <inheritdoc />
         public DateTime ConnectedTime { get; private set; }
 
         /// <inheritdoc />
@@ -73,7 +100,7 @@ namespace Robust.Server.Player
 
         /// <inheritdoc />
         [ViewVariables]
-        public NetSessionId SessionId { get; }
+        public NetUserId UserId { get; }
 
         private readonly PlayerData _data;
         [ViewVariables] public IPlayerData Data => _data;
@@ -82,7 +109,7 @@ namespace Robust.Server.Player
         public event EventHandler<SessionStatusEventArgs>? PlayerStatusChanged;
 
         /// <inheritdoc />
-        public void AttachToEntity(IEntity a)
+        public void AttachToEntity(IEntity? a)
         {
             DetachFromEntity();
 
@@ -127,7 +154,7 @@ namespace Robust.Server.Player
         /// <inheritdoc />
         public void OnConnect()
         {
-            ConnectedTime = DateTime.Now;
+            ConnectedTime = DateTime.UtcNow;
             Status = SessionStatus.Connected;
             UpdatePlayerState();
         }
@@ -161,6 +188,8 @@ namespace Robust.Server.Player
             UpdatePlayerState();
         }
 
+        public LoginType AuthType => ConnectedClient.AuthType;
+
         private void UpdatePlayerState()
         {
             PlayerState.Status = Status;
@@ -176,7 +205,7 @@ namespace Robust.Server.Player
         /// <inheritdoc />
         public override string ToString()
         {
-            return SessionId.ToString();
+            return Name;
         }
     }
 }

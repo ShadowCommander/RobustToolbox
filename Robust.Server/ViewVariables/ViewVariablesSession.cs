@@ -1,34 +1,33 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using Robust.Server.ViewVariables.Traits;
-using Robust.Shared.Interfaces.Serialization;
 using Robust.Shared.Network;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Server.ViewVariables
 {
-    internal sealed class ViewVariablesSession
+    internal sealed class ViewVariablesesSession : IViewVariablesSession
     {
-        private readonly List<ViewVariablesTrait> _traits = new List<ViewVariablesTrait>();
+        private readonly List<ViewVariablesTrait> _traits = new();
         public IViewVariablesHost Host { get; }
         public IRobustSerializer RobustSerializer { get; }
-        public NetSessionId PlayerSession { get; }
+        public NetUserId PlayerUser { get; }
         public object Object { get; }
         public uint SessionId { get; }
         public Type ObjectType { get; }
 
-        /// <param name="playerSession">The session ID of the player who opened this session.</param>
+        /// <param name="playerUser">The session ID of the player who opened this session.</param>
         /// <param name="o">The object we represent.</param>
         /// <param name="sessionId">
         ///     The session ID for this session. This is what the server and client use to talk about this session.
         /// </param>
         /// <param name="host">The view variables host owning this session.</param>
-        public ViewVariablesSession(NetSessionId playerSession, object o, uint sessionId, IViewVariablesHost host,
+        public ViewVariablesesSession(NetUserId playerUser, object o, uint sessionId, IViewVariablesHost host,
             IRobustSerializer robustSerializer)
         {
-            PlayerSession = playerSession;
+            PlayerUser = playerUser;
             Object = o;
             SessionId = sessionId;
             ObjectType = o.GetType();

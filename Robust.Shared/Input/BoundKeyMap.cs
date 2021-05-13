@@ -1,7 +1,7 @@
-﻿using Robust.Shared.Interfaces.Reflection;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
+using Robust.Shared.Reflection;
 using Robust.Shared.Serialization;
 
 namespace Robust.Shared.Input
@@ -62,8 +62,8 @@ namespace Robust.Shared.Input
     {
         private readonly IReflectionManager reflectionManager;
 
-        private readonly Dictionary<BoundKeyFunction, KeyFunctionId> KeyFunctionsMap = new Dictionary<BoundKeyFunction, KeyFunctionId>();
-        private readonly List<BoundKeyFunction> KeyFunctionsList = new List<BoundKeyFunction>();
+        private readonly Dictionary<BoundKeyFunction, KeyFunctionId> KeyFunctionsMap = new();
+        private readonly List<BoundKeyFunction> KeyFunctionsList = new();
 
         public BoundKeyMap(IReflectionManager reflectionManager)
         {

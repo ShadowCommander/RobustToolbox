@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Systems;
-using Robust.Shared.IoC;
 
 namespace Robust.Shared.Input.Binding
 {
@@ -27,7 +24,7 @@ namespace Robust.Shared.Input.Binding
         /// Builder to build a new set of Bindings
         /// </summary>
         /// <returns></returns>
-        public static BindingsBuilder Builder => new BindingsBuilder();
+        public static BindingsBuilder Builder => new();
 
         /// <summary>
         /// Unregisters from the current InputSystem's BindRegistry all bindings currently registered under
@@ -61,11 +58,11 @@ namespace Robust.Shared.Input.Binding
         /// </summary>
         public class BindingsBuilder
         {
-            private readonly List<CommandBind> _bindings = new List<CommandBind>();
+            private readonly List<CommandBind> _bindings = new();
 
             public static BindingsBuilder Create()
             {
-                return new BindingsBuilder();
+                return new();
             }
 
             /// <summary>
@@ -141,7 +138,7 @@ namespace Robust.Shared.Input.Binding
             /// </summary>
             public CommandBinds Build()
             {
-                return new CommandBinds(_bindings);
+                return new(_bindings);
             }
 
 

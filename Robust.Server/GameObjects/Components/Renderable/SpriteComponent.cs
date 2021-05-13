@@ -1,48 +1,73 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using Robust.Server.Interfaces.GameObjects;
 using Robust.Shared.GameObjects;
 using DrawDepthTag = Robust.Shared.GameObjects.DrawDepth;
-using Robust.Shared.GameObjects.Components.Renderable;
 using Robust.Shared.Log;
 using Robust.Shared.Maths;
+using Robust.Shared.Prototypes;
+using Robust.Shared.Players;
 using Robust.Shared.Serialization;
+using Robust.Shared.Serialization.Manager.Attributes;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Server.GameObjects
 {
-    public class SpriteComponent : SharedSpriteComponent, ISpriteRenderableComponent
+    public class SpriteComponent : SharedSpriteComponent, ISpriteRenderableComponent, ISerializationHooks
     {
         const string LayerSerializationCache = "spritelayersrv";
-        private List<PrototypeLayerData> Layers = new List<PrototypeLayerData>();
-
-        private bool _visible;
-        private int _drawDepth = DrawDepthTag.Default;
-        private Vector2 _scale;
-        private Vector2 _offset;
-        private Color _color;
-        private bool _directional;
-        private string? _baseRSIPath;
-        private Angle _rotation;
 
         [ViewVariables]
+        [DataField("layers", priority: 2, readOnly: true)]
+        private List<PrototypeLayerData> Layers = new();
+
+        [DataField("visible")]
+        private bool _visible = true;
+
+        [DataField("drawdepth", customTypeSerializer: typeof(ConstantSerializer<DrawDepthTag>))]
+        private int _drawDepth = DrawDepthTag.Default;
+
+        [DataField("scale")]
+        private Vector2 _scale = Vector2.One;
+
+        [DataField("offset")]
+        private Vector2 _offset = Vector2.Zero;
+
+        [DataField("color")]
+        private Color _color = Color.White;
+
+        [DataField("directional")]
+        private bool _directional = true;
+
+        [DataField("sprite")]
+        private string? _baseRSIPath;
+
+        [DataField("rotation")]
+        private Angle _rotation = Angle.Zero;
+
+        [DataField("state")] private string? state;
+        [DataField("texture")] private string? texture;
+
+        [ViewVariables(VVAccess.ReadWrite)]
         public int DrawDepth
         {
             get => _drawDepth;
             set
             {
+                if (_drawDepth == value) return;
                 _drawDepth = value;
                 Dirty();
             }
         }
 
         [ViewVariables(VVAccess.ReadWrite)]
-        public bool Visible
+        public override bool Visible
         {
             get => _visible;
             set
             {
+                if (_visible == value) return;
                 _visible = value;
                 Dirty();
             }
@@ -123,6 +148,34 @@ namespace Robust.Server.GameObjects
             {
                 _renderOrder = value;
                 Dirty();
+            }
+        }
+
+        [ViewVariables]
+        public int LayerCount => Layers.Count;
+
+        void ISerializationHooks.AfterDeserialization()
+        {
+            if (Layers.Count == 0)
+            {
+                if (state != null || texture != null)
+                {
+                    var layerZeroData = SharedSpriteComponent.PrototypeLayerData.New();
+                    if (!string.IsNullOrWhiteSpace(state))
+                    {
+                        layerZeroData.State = state;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(texture))
+                    {
+                        layerZeroData.TexturePath = texture;
+                    }
+
+                    Layers.Insert(0, layerZeroData);
+
+                    state = null;
+                    texture = null;
+                }
             }
         }
 
@@ -269,7 +322,7 @@ namespace Robust.Server.GameObjects
         {
             if (Layers.Count <= layer)
             {
-                Logger.ErrorS("go.comp.sprite", "Layer with index '{0}' does not exist, cannot set set! Trace:\n{1}",
+                Logger.ErrorS("go.comp.sprite", "Layer with index '{0}' does not exist, cannot set state! Trace:\n{1}",
                     layer, Environment.StackTrace);
                 return;
             }
@@ -386,62 +439,9 @@ namespace Robust.Server.GameObjects
             Dirty();
         }
 
-        public override void ExposeData(ObjectSerializer serializer)
+        public override ComponentState GetComponentState(ICommonSession player)
         {
-            base.ExposeData(serializer);
-
-            serializer.DataFieldCached(ref _visible, "visible", true);
-            serializer.DataFieldCached(ref _drawDepth, "drawdepth", DrawDepthTag.Default, WithFormat.Constants<DrawDepthTag>());
-            serializer.DataFieldCached(ref _offset, "offset", Vector2.Zero);
-            serializer.DataFieldCached(ref _scale, "scale", Vector2.One);
-            serializer.DataFieldCached(ref _color, "color", Color.White);
-            serializer.DataFieldCached(ref _directional, "directional", true);
-            serializer.DataFieldCached(ref _baseRSIPath, "sprite", null);
-            serializer.DataFieldCached(ref _rotation, "rotation", Angle.Zero);
-
-            // TODO: Writing?
-            if (!serializer.Reading)
-            {
-                return;
-            }
-
-            if (serializer.TryGetCacheData<List<PrototypeLayerData>>(LayerSerializationCache, out var layers))
-            {
-                Layers = layers.ShallowClone();
-                return;
-            }
-
-            var layerData =
-                serializer.ReadDataField<List<PrototypeLayerData>>("layers", new List<PrototypeLayerData>());
-
-            {
-                var baseState = serializer.ReadDataField<string?>("state", null);
-                var texturePath = serializer.ReadDataField<string?>("texture", null);
-
-                if (baseState != null || texturePath != null)
-                {
-                    var layerZeroData = PrototypeLayerData.New();
-                    if (!string.IsNullOrWhiteSpace(baseState))
-                    {
-                        layerZeroData.State = baseState;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(texturePath))
-                    {
-                        layerZeroData.TexturePath = texturePath;
-                    }
-
-                    layerData.Insert(0, layerZeroData);
-                }
-            }
-
-            serializer.SetCacheData(LayerSerializationCache, layerData.ShallowClone());
-            Layers = layerData;
-        }
-
-        public override ComponentState GetComponentState()
-        {
-            return new SpriteComponentState(Visible, DrawDepth, Scale, Rotation, Offset, Color, Directional,
+            return new SpriteComponentState(Visible, DrawDepth, Scale, Rotation, Offset, Color,
                 BaseRSIPath, Layers, RenderOrder);
         }
     }

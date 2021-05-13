@@ -1,22 +1,19 @@
-﻿using System;
+using System;
 using System.Net;
-using Robust.Client.Interfaces;
-using Robust.Client.Interfaces.Debugging;
-using Robust.Client.Interfaces.GameObjects;
-using Robust.Client.Interfaces.GameStates;
-using Robust.Client.Interfaces.State;
-using Robust.Client.Interfaces.Utility;
+using Robust.Client.Debugging;
+using Robust.Client.GameObjects;
+using Robust.Client.GameStates;
 using Robust.Client.Player;
+using Robust.Client.Utility;
+using Robust.Shared;
+using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
-using Robust.Shared.Interfaces.Configuration;
-using Robust.Shared.Interfaces.Map;
-using Robust.Shared.Interfaces.Network;
-using Robust.Shared.Interfaces.Timing;
+using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
+using Robust.Shared.Map;
 using Robust.Shared.Network;
-using Robust.Shared.Network.Messages;
-using Robust.Shared.Players;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
 namespace Robust.Client
@@ -26,7 +23,7 @@ namespace Robust.Client
     {
         [Dependency] private readonly IClientNetManager _net = default!;
         [Dependency] private readonly IPlayerManager _playMan = default!;
-        [Dependency] private readonly IConfigurationManager _configManager = default!;
+        [Dependency] private readonly INetConfigurationManager _configManager = default!;
         [Dependency] private readonly IClientEntityManager _entityManager = default!;
         [Dependency] private readonly IMapManager _mapManager = default!;
         [Dependency] private readonly IDiscordRichPresence _discord = default!;
@@ -51,16 +48,26 @@ namespace Robust.Client
         /// <inheritdoc />
         public void Initialize()
         {
-            _net.RegisterNetMessage<MsgServerInfo>(MsgServerInfo.NAME, HandleServerInfo);
-            _net.RegisterNetMessage<MsgSetTickRate>(MsgSetTickRate.NAME, HandleSetTickRate);
-            _net.RegisterNetMessage<MsgServerInfoReq>(MsgServerInfoReq.NAME);
             _net.Connected += OnConnected;
             _net.ConnectFailed += OnConnectFailed;
             _net.Disconnect += OnNetDisconnect;
 
+            _configManager.OnValueChanged(CVars.NetTickrate, TickRateChanged, invokeImmediately: true);
+
             _playMan.Initialize();
             _debugDrawMan.Initialize();
             Reset();
+        }
+
+        private void TickRateChanged(int tickrate)
+        {
+            if (GameInfo != null)
+            {
+                GameInfo.TickRate = (byte) tickrate;
+            }
+
+            _timing.TickRate = (byte) tickrate;
+            Logger.InfoS("client", $"Tickrate changed to: {tickrate} on tick {_timing.CurTick}");
         }
 
         /// <inheritdoc />
@@ -77,7 +84,7 @@ namespace Robust.Client
 
             OnRunLevelChanged(ClientRunLevel.Connecting);
             _net.ClientConnect(endPoint.Host, endPoint.Port,
-                PlayerNameOverride ?? _configManager.GetCVar<string>("player.name"));
+                PlayerNameOverride ?? _configManager.GetCVar(CVars.PlayerName));
         }
 
         /// <inheritdoc />
@@ -91,6 +98,25 @@ namespace Robust.Client
         }
 
         /// <inheritdoc />
+        public void StartSinglePlayer()
+        {
+            DebugTools.Assert(RunLevel < ClientRunLevel.Connecting);
+            DebugTools.Assert(!_net.IsConnected);
+            _playMan.Startup();
+            _playMan.LocalPlayer!.Name = PlayerNameOverride ?? _configManager.GetCVar(CVars.PlayerName);
+            OnRunLevelChanged(ClientRunLevel.SinglePlayerGame);
+            GameStartedSetup();
+        }
+
+        /// <inheritdoc />
+        public void StopSinglePlayer()
+        {
+            DebugTools.Assert(RunLevel == ClientRunLevel.SinglePlayerGame);
+            DebugTools.Assert(!_net.IsConnected);
+            GameStoppedReset();
+        }
+
+        /// <inheritdoc />
         public event EventHandler<RunLevelChangedEventArgs>? RunLevelChanged;
 
         public event EventHandler<PlayerEventArgs>? PlayerJoinedServer;
@@ -99,9 +125,39 @@ namespace Robust.Client
 
         private void OnConnected(object? sender, NetChannelArgs args)
         {
-            // request base info about the server
-            var msgInfo = _net.CreateNetMessage<MsgServerInfoReq>();
-            _net.ClientSendMessage(msgInfo);
+            _configManager.SyncWithServer();
+            _configManager.ReceivedInitialNwVars += OnReceivedClientData;
+        }
+
+        private void OnReceivedClientData(object? sender, EventArgs e)
+        {
+            _configManager.ReceivedInitialNwVars -= OnReceivedClientData;
+
+            var info = GameInfo;
+
+            var serverName = _configManager.GetCVar<string>("game.hostname");
+            if (info == null)
+            {
+                GameInfo = info = new ServerInfo(serverName);
+            }
+            else
+            {
+                info.ServerName = serverName;
+            }
+
+            var maxPlayers = _configManager.GetCVar<int>("game.maxplayers");
+            info.ServerMaxPlayers = maxPlayers;
+
+            var userName = _net.ServerChannel!.UserName;
+            var userId = _net.ServerChannel.UserId;
+            _discord.Update(info.ServerName, userName, info.ServerMaxPlayers.ToString());
+            // start up player management
+            _playMan.Startup();
+
+            _playMan.LocalPlayer!.UserId = userId;
+            _playMan.LocalPlayer.Name = userName;
+
+            _playMan.LocalPlayer.StatusChanged += OnLocalStatusChanged;
         }
 
         /// <summary>
@@ -114,12 +170,18 @@ namespace Robust.Client
             DebugTools.Assert(RunLevel < ClientRunLevel.Connected);
             OnRunLevelChanged(ClientRunLevel.Connected);
 
+            GameStartedSetup();
+
+            PlayerJoinedServer?.Invoke(this, new PlayerEventArgs(session));
+        }
+
+        private void GameStartedSetup()
+        {
             _entityManager.Startup();
             _mapManager.Startup();
 
             _timing.ResetSimTime();
             _timing.Paused = false;
-            PlayerJoinedServer?.Invoke(this, new PlayerEventArgs(session));
         }
 
         /// <summary>
@@ -136,6 +198,7 @@ namespace Robust.Client
 
         private void Reset()
         {
+            _configManager.ClearReceivedInitialNwVars();
             OnRunLevelChanged(ClientRunLevel.Initialize);
         }
 
@@ -152,47 +215,19 @@ namespace Robust.Client
             PlayerLeaveServer?.Invoke(this, new PlayerEventArgs(_playMan.LocalPlayer?.Session));
 
             LastDisconnectReason = args.Reason;
+            GameStoppedReset();
+        }
 
+        private void GameStoppedReset()
+        {
+            IoCManager.Resolve<INetConfigurationManager>().FlushMessages();
             _gameStates.Reset();
             _playMan.Shutdown();
+            IoCManager.Resolve<IEntityLookup>().Shutdown();
             _entityManager.Shutdown();
             _mapManager.Shutdown();
             _discord.ClearPresence();
             Reset();
-        }
-
-        private void HandleServerInfo(MsgServerInfo msg)
-        {
-            var info = GameInfo;
-
-            if (info == null)
-            {
-                GameInfo = info = new ServerInfo(msg.ServerName);
-            }
-            else
-            {
-                info.ServerName = msg.ServerName;
-            }
-
-            info.ServerMaxPlayers = msg.ServerMaxPlayers;
-            info.SessionId = msg.PlayerSessionId;
-            info.TickRate = msg.TickRate;
-            _timing.TickRate = msg.TickRate;
-            Logger.InfoS("client", $"Tickrate changed to: {msg.TickRate}");
-
-            _discord.Update(info.ServerName, info.SessionId.Username, info.ServerMaxPlayers.ToString());
-            // start up player management
-            _playMan.Startup(_net.ServerChannel!);
-
-            _playMan.LocalPlayer!.SessionId = info.SessionId;
-
-            _playMan.LocalPlayer.StatusChanged += OnLocalStatusChanged;
-        }
-
-        private void HandleSetTickRate(MsgSetTickRate message)
-        {
-            _timing.TickRate = message.NewTickRate;
-            Logger.InfoS("client", $"Tickrate changed to: {message.NewTickRate} on tick {_timing.CurTick}");
         }
 
         private void OnLocalStatusChanged(object? obj, StatusEventArgs eventArgs)
@@ -222,7 +257,7 @@ namespace Robust.Client
     /// <summary>
     ///     Enumeration of the run levels of the BaseClient.
     /// </summary>
-    public enum ClientRunLevel
+    public enum ClientRunLevel : byte
     {
         Error = 0,
 
@@ -245,6 +280,11 @@ namespace Robust.Client
         ///     The client is now in the game, moving around.
         /// </summary>
         InGame,
+
+        /// <summary>
+        ///     The client is now in singleplayer mode, in-game.
+        /// </summary>
+        SinglePlayerGame,
     }
 
     /// <summary>
@@ -312,7 +352,5 @@ namespace Robust.Client
         public int ServerMaxPlayers { get; set; }
 
         public byte TickRate { get; internal set; }
-
-        public NetSessionId SessionId { get; set; }
     }
 }

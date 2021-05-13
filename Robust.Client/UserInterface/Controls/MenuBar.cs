@@ -11,8 +11,8 @@ namespace Robust.Client.UserInterface.Controls
     /// </summary>
     public class MenuBar : PanelContainer
     {
-        private readonly List<Menu> _menus = new List<Menu>();
-        private readonly List<MenuBarTopButton> _buttons = new List<MenuBarTopButton>();
+        private readonly List<Menu> _menus = new();
+        private readonly List<MenuBarTopButton> _buttons = new();
         private readonly HBoxContainer _hBox;
         private readonly Popup _popup;
         private readonly VBoxContainer _popupVBox;
@@ -26,7 +26,7 @@ namespace Robust.Client.UserInterface.Controls
             {
                 Children =
                 {
-                    (_popupVBox = new VBoxContainer {CustomMinimumSize = (300, 0)})
+                    (_popupVBox = new VBoxContainer {MinSize = (300, 0)})
                 }
             };
             _popup.OnPopupHide += PopupHidden;
@@ -113,7 +113,7 @@ namespace Robust.Client.UserInterface.Controls
                         break;
 
                     case MenuSeparator _:
-                        var control = new Control {CustomMinimumSize = (0, 6)};
+                        var control = new Control {MinSize = (0, 6)};
                         container.AddChild(control);
                         break;
                 }
@@ -235,7 +235,7 @@ namespace Robust.Client.UserInterface.Controls
         {
             public string? Title { get; set; }
 
-            public List<MenuEntry> Entries { get; } = new List<MenuEntry>();
+            public List<MenuEntry> Entries { get; } = new();
         }
 
         /// <summary>

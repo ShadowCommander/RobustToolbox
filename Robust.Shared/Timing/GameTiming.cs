@@ -1,10 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using Robust.Shared.Interfaces.Timing;
+using Robust.Shared.IoC;
+using Robust.Shared.Network;
 using Robust.Shared.Utility;
-using Robust.Shared.Log;
 
 namespace Robust.Shared.Timing
 {
@@ -17,7 +16,7 @@ namespace Robust.Shared.Timing
         private const int NumFrames = 60;
 
         private readonly IStopwatch _realTimer = new Stopwatch();
-        private readonly List<long> _realFrameTimes = new List<long>(NumFrames);
+        private readonly List<long> _realFrameTimes = new(NumFrames);
         private TimeSpan _lastRealTime;
 
         /// <summary>
@@ -87,6 +86,8 @@ namespace Robust.Shared.Timing
         /// </summary>
         public TimeSpan RealTime => _realTimer.Elapsed;
 
+        public virtual TimeSpan ServerTime => TimeSpan.Zero;
+
         /// <summary>
         ///     The simulated time it took to render the last frame.
         /// </summary>
@@ -115,7 +116,7 @@ namespace Robust.Shared.Timing
         /// <summary>
         ///     The current simulation tick being processed.
         /// </summary>
-        public GameTick CurTick { get; set; } = new GameTick(1); // Time always starts on the first tick
+        public GameTick CurTick { get; set; } = new(1); // Time always starts on the first tick
 
         private byte _tickRate;
         private TimeSpan _tickRemainder;
@@ -217,15 +218,6 @@ namespace Robust.Shared.Timing
         }
 
         /// <summary>
-        ///     Resets the real uptime of the server.
-        /// </summary>
-        public void ResetRealTime()
-        {
-            _realTimer.Restart();
-            _lastRealTime = TimeSpan.Zero;
-        }
-
-        /// <summary>
         /// Resets the simulation time.
         /// </summary>
         public void ResetSimTime()
@@ -236,23 +228,28 @@ namespace Robust.Shared.Timing
             Paused = true;
         }
 
-        public bool IsFirstTimePredicted { get; private set; } = true;
-
-        public void StartPastPrediction()
+        public virtual TimeSpan RealLocalToServer(TimeSpan local)
         {
-            // Don't allow recursive predictions.
-            // Not sure if it's necessary yet and if not, great!
-            DebugTools.Assert(IsFirstTimePredicted);
-
-            IsFirstTimePredicted = false;
+            return TimeSpan.Zero;
         }
 
-        public void EndPastPrediction()
+        public virtual TimeSpan RealServerToLocal(TimeSpan server)
         {
-            DebugTools.Assert(!IsFirstTimePredicted);
-
-            IsFirstTimePredicted = true;
+            return TimeSpan.Zero;
         }
+
+        protected virtual TimeSpan? GetServerOffset()
+        {
+            return null;
+        }
+
+        public bool IsFirstTimePredicted { get; protected set; } = true;
+
+        /// <inheritdoc />
+        public bool InPrediction => CurTick > LastRealTick;
+
+        /// <inheritdoc />
+        public GameTick LastRealTick { get; set; }
 
         /// <summary>
         ///     Calculates the average FPS of the last 50 real frame times.

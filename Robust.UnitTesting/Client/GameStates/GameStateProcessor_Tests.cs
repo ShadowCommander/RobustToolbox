@@ -2,7 +2,6 @@
 using NUnit.Framework;
 using Robust.Client.GameStates;
 using Robust.Shared.GameStates;
-using Robust.Shared.Interfaces.Timing;
 using Robust.Shared.Timing;
 
 namespace Robust.UnitTesting.Client.GameStates
@@ -236,7 +235,7 @@ namespace Robust.UnitTesting.Client.GameStates
         /// </summary>
         private static GameState GameStateFactory(uint from, uint to)
         {
-            return new GameState(new GameTick(@from), new GameTick(to), 0, null, null, null, null);
+            return new(new GameTick(@from), new GameTick(to), 0, null, null, null, null);
         }
 
         /// <summary>

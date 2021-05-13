@@ -1,17 +1,14 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using Robust.Client.Interfaces;
 using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
-using Robust.Shared.Interfaces.Configuration;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Network;
 using Robust.Shared.IoC;
 using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
+using Robust.Shared.Players;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
@@ -26,13 +23,27 @@ namespace Robust.Client.Player
     {
         [Dependency] private readonly IClientNetManager _network = default!;
         [Dependency] private readonly IBaseClient _client = default!;
-        [Dependency] private readonly IConfigurationManager _config = default!;
         [Dependency] private readonly IEntityManager _entityManager = default!;
 
         /// <summary>
         ///     Active sessions of connected clients to the server.
         /// </summary>
-        private readonly Dictionary<NetSessionId, IPlayerSession> _sessions = new Dictionary<NetSessionId, IPlayerSession>();
+        private readonly Dictionary<NetUserId, IPlayerSession> _sessions = new();
+
+        /// <inheritdoc />
+        public IEnumerable<ICommonSession> NetworkedSessions
+        {
+            get
+            {
+                if (LocalPlayer is not null)
+                    return new[] {LocalPlayer.Session};
+
+                return Enumerable.Empty<ICommonSession>();
+            }
+        }
+
+        /// <inheritdoc />
+        IEnumerable<ICommonSession> ISharedPlayerManager.Sessions => _sessions.Values;
 
         /// <inheritdoc />
         public int PlayerCount => _sessions.Values.Count;
@@ -41,13 +52,27 @@ namespace Robust.Client.Player
         public int MaxPlayers => _client.GameInfo?.ServerMaxPlayers ?? 0;
 
         /// <inheritdoc />
-        [ViewVariables] public LocalPlayer? LocalPlayer { get; private set; }
+        [ViewVariables]
+        public LocalPlayer? LocalPlayer
+        {
+            get => _localPlayer;
+            private set
+            {
+                if (_localPlayer == value) return;
+                var oldValue = _localPlayer;
+                _localPlayer = value;
+                LocalPlayerChanged?.Invoke(new LocalPlayerChangedEventArgs(oldValue, _localPlayer));
+            }
+        }
+        private LocalPlayer? _localPlayer;
+        public event Action<LocalPlayerChangedEventArgs>? LocalPlayerChanged;
 
         /// <inheritdoc />
-        [ViewVariables] public IEnumerable<IPlayerSession> Sessions => _sessions.Values;
+        [ViewVariables]
+        IEnumerable<IPlayerSession> IPlayerManager.Sessions => _sessions.Values;
 
         /// <inheritdoc />
-        public IReadOnlyDictionary<NetSessionId, IPlayerSession> SessionsDict => _sessions;
+        public IReadOnlyDictionary<NetUserId, IPlayerSession> SessionsDict => _sessions;
 
         /// <inheritdoc />
         public event EventHandler? PlayerListUpdated;
@@ -55,26 +80,20 @@ namespace Robust.Client.Player
         /// <inheritdoc />
         public void Initialize()
         {
-            _config.RegisterCVar("player.name", "JoeGenero", CVar.ARCHIVE);
+            _client.RunLevelChanged += OnRunLevelChanged;
 
             _network.RegisterNetMessage<MsgPlayerListReq>(MsgPlayerListReq.NAME);
             _network.RegisterNetMessage<MsgPlayerList>(MsgPlayerList.NAME, HandlePlayerList);
         }
 
         /// <inheritdoc />
-        public void Startup(INetChannel channel)
+        public void Startup()
         {
-            LocalPlayer = new LocalPlayer(_network, _config);
+            LocalPlayer = new LocalPlayer();
 
             var msgList = _network.CreateNetMessage<MsgPlayerListReq>();
             // message is empty
             _network.ClientSendMessage(msgList);
-        }
-
-        /// <inheritdoc />
-        public void Update(float frameTime)
-        {
-            // Uh, nothing anymore I guess.
         }
 
         /// <inheritdoc />
@@ -96,7 +115,7 @@ namespace Robust.Client.Player
             DebugTools.Assert(LocalPlayer != null, "Call Startup()");
             DebugTools.Assert(LocalPlayer!.Session != null, "Received player state before Session finished setup.");
 
-            var myState = list.FirstOrDefault(s => s.SessionId == LocalPlayer.SessionId);
+            var myState = list.FirstOrDefault(s => s.UserId == LocalPlayer.UserId);
 
             if (myState != null)
             {
@@ -151,13 +170,13 @@ namespace Robust.Client.Player
         {
             var dirty = false;
 
-            var hitSet = new List<NetSessionId>();
+            var hitSet = new List<NetUserId>();
 
             foreach (var state in remotePlayers)
             {
-                hitSet.Add(state.SessionId);
+                hitSet.Add(state.UserId);
 
-                if (_sessions.TryGetValue(state.SessionId, out var local))
+                if (_sessions.TryGetValue(state.UserId, out var local))
                 {
                     // Exists, update data.
                     if (local.Name == state.Name && local.Status == state.Status && local.Ping == state.Ping)
@@ -173,17 +192,17 @@ namespace Robust.Client.Player
                     // New, give him a slot.
                     dirty = true;
 
-                    var newSession = new PlayerSession(state.SessionId)
+                    var newSession = new PlayerSession(state.UserId)
                     {
                         Name = state.Name,
                         Status = state.Status,
                         Ping = state.Ping
                     };
-                    _sessions.Add(state.SessionId, newSession);
-                    if (state.SessionId == LocalPlayer!.SessionId)
+                    _sessions.Add(state.UserId, newSession);
+                    if (state.UserId == LocalPlayer!.UserId)
                     {
                         LocalPlayer.InternalSession = newSession;
-
+                        newSession.ConnectedClient = _network.ServerChannel!;
                         // We just connected to the server, hurray!
                         LocalPlayer.SwitchState(SessionStatus.Connecting, newSession.Status);
                     }
@@ -195,7 +214,7 @@ namespace Robust.Client.Player
                 // clear slot, player left
                 if (!hitSet.Contains(existing))
                 {
-                    DebugTools.Assert(LocalPlayer!.SessionId != existing, "I'm still connected to the server, but i left?");
+                    DebugTools.Assert(LocalPlayer!.UserId != existing, "I'm still connected to the server, but i left?");
                     _sessions.Remove(existing);
                     dirty = true;
                 }
@@ -205,6 +224,35 @@ namespace Robust.Client.Player
             {
                 PlayerListUpdated?.Invoke(this, EventArgs.Empty);
             }
+        }
+
+        private void OnRunLevelChanged(object? sender, RunLevelChangedEventArgs e)
+        {
+            if (e.NewLevel != ClientRunLevel.SinglePlayerGame)
+                return;
+
+            DebugTools.AssertNotNull(LocalPlayer);
+
+            // We do some further setup steps for singleplayer here...
+
+            // The local player's GUID in singleplayer will always be the default.
+            var guid = default(NetUserId);
+
+            var session = new PlayerSession(guid)
+            {
+                Name = LocalPlayer!.Name,
+                Ping = 0,
+            };
+
+            LocalPlayer.UserId = guid;
+            LocalPlayer.InternalSession = session;
+
+            // Add the local session to the list.
+            _sessions.Add(guid, session);
+
+            LocalPlayer.SwitchState(SessionStatus.InGame);
+
+            PlayerListUpdated?.Invoke(this, EventArgs.Empty);
         }
     }
 }

@@ -4,18 +4,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using JetBrains.Annotations;
 using NetSerializer;
 using Newtonsoft.Json.Linq;
 using Robust.Shared.ContentPack;
-using Robust.Shared.Interfaces.Log;
-using Robust.Shared.Interfaces.Network;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
+using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
 using Robust.Shared.Utility;
 using YamlDotNet.RepresentationModel;
@@ -41,7 +38,7 @@ namespace Robust.Shared.Serialization
     /// send the constant value instead - and at the other end, the
     /// serializer can use the same mapping to recover the original string.
     /// </remarks>
-    internal partial class RobustMappedStringSerializer : IStaticTypeSerializer, IRobustMappedStringSerializer
+    internal sealed partial class RobustMappedStringSerializer : IStaticTypeSerializer, IRobustMappedStringSerializer
     {
         private delegate void WriteStringDelegate(Stream stream, string? value);
 
@@ -79,13 +76,13 @@ namespace Robust.Shared.Serialization
         /// The special value corresponding to a <c>null</c> string in the
         /// encoding.
         /// </summary>
-        private const int MappedNull = 0;
+        private const uint MappedNull = 0;
 
         /// <summary>
         /// The special value corresponding to a string which was not mapped.
         /// This is followed by the bytes of the unmapped string.
         /// </summary>
-        private const int UnmappedString = 1;
+        private const uint UnmappedString = 1;
 
         /// <summary>
         /// The first non-special value, used for encoding mapped strings.
@@ -97,7 +94,7 @@ namespace Robust.Shared.Serialization
         /// <c>>= FirstMappedIndexStart</c> represents the string with
         /// mapping of that value <c> - FirstMappedIndexStart</c>.
         /// </remarks>
-        private const int FirstMappedIndexStart = 2;
+        private const uint FirstMappedIndexStart = 2;
 
         [Dependency] private readonly INetManager _net = default!;
 
@@ -107,7 +104,8 @@ namespace Robust.Shared.Serialization
 
         private MappedStringDict _dict = default!;
 
-        private readonly HashSet<INetChannel> _incompleteHandshakes = new HashSet<INetChannel>();
+        private readonly Dictionary<INetChannel, InProgressHandshake> _incompleteHandshakes
+            = new();
 
         private byte[]? _mappedStringsPackage;
         private byte[]? _serverHash;
@@ -121,8 +119,10 @@ namespace Robust.Shared.Serialization
         /// </exception>
         public ReadOnlySpan<byte> MappedStringsHash => _stringMapHash;
 
+        public bool EnableCaching { get; set; } = true;
+
         private static readonly Regex RxSymbolSplitter
-            = new Regex(
+            = new(
                 @"(?<=[^\s\W])(?=[A-Z]) # Match for split at start of new capital letter
                             |(?<=[^0-9\s\W])(?=[0-9]) # Match for split before spans of numbers
                             |(?<=[A-Za-z0-9])(?=_) # Match for a split before an underscore
@@ -133,6 +133,7 @@ namespace Robust.Shared.Serialization
                 | RegexOptions.IgnorePatternWhitespace
             );
 
+        public bool Locked => _dict.Locked;
 
         public ITypeSerializer TypeSerializer => this;
 
@@ -147,23 +148,20 @@ namespace Robust.Shared.Serialization
         /// </remarks>
         /// <seealso cref="MsgMapStrClientHandshake"/>
         /// <seealso cref="MsgMapStrStrings"/>
-        public async Task Handshake(INetChannel channel)
+        public Task Handshake(INetChannel channel)
         {
             DebugTools.Assert(_net.IsServer);
             DebugTools.Assert(_dict.Locked);
 
-            _incompleteHandshakes.Add(channel);
+            var tcs = new TaskCompletionSource<object?>();
+
+            _incompleteHandshakes.Add(channel, new InProgressHandshake(tcs));
 
             var message = _net.CreateNetMessage<MsgMapStrServerHandshake>();
             message.Hash = _stringMapHash;
             _net.ServerSendMessage(message, channel);
 
-            while (_incompleteHandshakes.Contains(channel))
-            {
-                await Task.Delay(1);
-            }
-
-            LogSzr.Debug($"Completed handshake with {channel.RemoteEndPoint.Address}.");
+            return tcs.Task;
         }
 
         /// <summary>
@@ -216,9 +214,25 @@ namespace Robust.Shared.Serialization
         /// <seealso cref="OnClientCompleteHandshake"/>
         private void NetworkInitialize()
         {
-            _net.RegisterNetMessage<MsgMapStrServerHandshake>(nameof(MsgMapStrServerHandshake), HandleServerHandshake);
-            _net.RegisterNetMessage<MsgMapStrClientHandshake>(nameof(MsgMapStrClientHandshake), HandleClientHandshake);
-            _net.RegisterNetMessage<MsgMapStrStrings>(nameof(MsgMapStrStrings), HandleStringsMessage);
+            _net.RegisterNetMessage<MsgMapStrServerHandshake>(nameof(MsgMapStrServerHandshake), HandleServerHandshake, NetMessageAccept.Client);
+            _net.RegisterNetMessage<MsgMapStrClientHandshake>(nameof(MsgMapStrClientHandshake), HandleClientHandshake, NetMessageAccept.Server);
+            _net.RegisterNetMessage<MsgMapStrStrings>(nameof(MsgMapStrStrings), HandleStringsMessage, NetMessageAccept.Client);
+
+            _net.Disconnect += NetOnDisconnect;
+        }
+
+        private void NetOnDisconnect(object? sender, NetDisconnectedArgs e)
+        {
+            // Cancel handshake in-progress if client disconnects mid-handshake.
+            var channel = e.Channel;
+            if (_incompleteHandshakes.TryGetValue(channel, out var handshake))
+            {
+                var tcs = handshake.Tcs;
+                LogSzr.Debug($"Cancelling handshake for disconnected client {channel.UserId}");
+                tcs.SetCanceled();
+            }
+
+            _incompleteHandshakes.Remove(channel);
         }
 
         /// <summary>
@@ -251,13 +265,7 @@ namespace Robust.Shared.Serialization
         /// <seealso cref="NetworkInitialize"/>
         private void HandleStringsMessage(MsgMapStrStrings msg)
         {
-            if (_net.IsServer)
-            {
-                // Reason should show up on disconnect logs.
-                msg.MsgChannel.Disconnect("MsgMapStrStrings sent to server.");
-                return;
-            }
-
+            DebugTools.Assert(_net.IsClient);
             DebugTools.AssertNotNull(msg.Package);
             DebugTools.AssertNotNull(_serverHash);
 
@@ -276,7 +284,10 @@ namespace Robust.Shared.Serialization
             LogSzr.Debug($"Locked in at {_dict.StringCount} mapped strings.");
 
             packageStream.Position = 0;
-            WriteStringCache(packageStream);
+            if (EnableCaching)
+            {
+                WriteStringCache(packageStream);
+            }
 
             // ok we're good now
             var channel = msg.MsgChannel;
@@ -320,23 +331,38 @@ namespace Robust.Shared.Serialization
             DebugTools.Assert(_net.IsServer);
             DebugTools.Assert(_dict.Locked);
 
-            LogSzr.Debug($"Received handshake from {msgMapStr.MsgChannel.RemoteEndPoint.Address}.");
+            var channel = msgMapStr.MsgChannel;
+            LogSzr.Debug($"Received handshake from {channel.UserName}.");
 
-            if (!msgMapStr.NeedsStrings)
+            if (!_incompleteHandshakes.TryGetValue(channel, out var handshake))
             {
-                LogSzr.Debug($"Completing handshake with {msgMapStr.MsgChannel.RemoteEndPoint.Address}.");
-                _incompleteHandshakes.Remove(msgMapStr.MsgChannel);
+                channel.Disconnect("MsgMapStrClientHandshake without in-progress handshake.");
                 return;
             }
 
-            // TODO: count and limit number of requests to send strings during handshake
+            if (!msgMapStr.NeedsStrings)
+            {
+                LogSzr.Debug($"Completing handshake with {channel.UserName}.");
+
+                handshake.Tcs.SetResult(null);
+                _incompleteHandshakes.Remove(channel);
+                return;
+            }
+
+            if (handshake.HasRequestedStrings)
+            {
+                channel.Disconnect("Cannot request strings twice");
+                return;
+            }
+
+            handshake.HasRequestedStrings = true;
 
             var strings = _net.CreateNetMessage<MsgMapStrStrings>();
             strings.Package = _mappedStringsPackage;
             LogSzr.Debug(
-                $"Sending {_mappedStringsPackage!.Length} bytes sized mapped strings package to {msgMapStr.MsgChannel.SessionId}.");
+                $"Sending {_mappedStringsPackage!.Length} bytes sized mapped strings package to {channel.UserName}.");
 
-            _net.ServerSendMessage(strings, msgMapStr.MsgChannel);
+            _net.ServerSendMessage(strings, channel);
         }
 
         /// <summary>
@@ -374,11 +400,7 @@ namespace Robust.Shared.Serialization
         /// <seealso cref="NetworkInitialize"/>
         private void HandleServerHandshake(MsgMapStrServerHandshake msgMapStr)
         {
-            if (_net.IsServer)
-            {
-                LogSzr.Error("Received server handshake on server.");
-                return;
-            }
+            DebugTools.Assert(_net.IsClient);
 
             _serverHash = msgMapStr.Hash;
 
@@ -387,7 +409,7 @@ namespace Robust.Shared.Serialization
             LogSzr.Debug($"Received server handshake with hash {hashStr}.");
 
             var fileName = CacheForHash(hashStr);
-            if (!File.Exists(fileName))
+            if (fileName == null || !File.Exists(fileName))
             {
                 LogSzr.Debug($"No string cache for {hashStr}.");
                 var handshake = _net.CreateNetMessage<MsgMapStrClientHandshake>();
@@ -440,8 +462,12 @@ namespace Robust.Shared.Serialization
         /// file itself may or may not exist. If it does not exist, no cache
         /// was made for the given hash.
         /// </returns>
-        private static string CacheForHash(string hashStr)
+        private string? CacheForHash(string hashStr)
         {
+            if (!EnableCaching)
+            {
+                return null;
+            }
             return PathHelpers.ExecutableRelativeFile($"strings-{hashStr}");
         }
 
@@ -453,7 +479,7 @@ namespace Robust.Shared.Serialization
             var hashStr = Convert.ToBase64String(MappedStringsHash);
             hashStr = ConvertToBase64Url(hashStr);
 
-            var fileName = CacheForHash(hashStr);
+            var fileName = CacheForHash(hashStr)!;
             using var file = File.OpenWrite(fileName);
             stream.CopyTo(file);
 
@@ -595,77 +621,6 @@ namespace Robust.Shared.Serialization
             mss._dict.ReadMappedString(stream, out value);
         }
 
-        // TODO: move the below methods to some stream helpers class
-
-#if ROBUST_SERIALIZER_DISABLE_COMPRESSED_UINTS
-            private static int WriteCompressedUnsignedInt(Stream stream, uint value)
-            {
-                WriteUnsignedInt(stream, value);
-                return 4;
-            }
-
-            private static uint ReadCompressedUnsignedInt(Stream stream, out int byteCount)
-            {
-                byteCount = 4;
-                return ReadUnsignedInt(stream);
-            }
-#else
-        private static int WriteCompressedUnsignedInt(Stream stream, uint value)
-        {
-            var length = 1;
-            while (value >= 0x80)
-            {
-                stream.WriteByte((byte) (0x80 | value));
-                value >>= 7;
-                ++length;
-            }
-
-            stream.WriteByte((byte) value);
-            return length;
-        }
-
-        private static uint ReadCompressedUnsignedInt(Stream stream, out int byteCount)
-        {
-            byteCount = 0;
-            var value = 0u;
-            var shift = 0;
-            while (stream.CanRead)
-            {
-                var current = stream.ReadByte();
-                ++byteCount;
-                if (current == -1)
-                {
-                    throw new EndOfStreamException();
-                }
-
-                value |= (0x7Fu & (byte) current) << shift;
-                shift += 7;
-                if ((0x80 & current) == 0)
-                {
-                    return value;
-                }
-            }
-
-            throw new EndOfStreamException();
-        }
-#endif
-
-        [UsedImplicitly]
-        private static unsafe void WriteUnsignedInt(Stream stream, uint value)
-        {
-            var bytes = MemoryMarshal.AsBytes(new ReadOnlySpan<uint>(&value, 1));
-            stream.Write(bytes);
-        }
-
-        [UsedImplicitly]
-        private static unsafe uint ReadUnsignedInt(Stream stream)
-        {
-            uint value;
-            var bytes = MemoryMarshal.AsBytes(new Span<uint>(&value, 1));
-            stream.Read(bytes);
-            return value;
-        }
-
         /// <summary>
         /// See <see cref="OnClientCompleteHandshake"/>.
         /// </summary>
@@ -681,7 +636,7 @@ namespace Robust.Shared.Serialization
 
             (_stringMapHash, _mappedStringsPackage) = _dict.GeneratePackage();
 
-            LogSzr.Debug($"Wrote string package in {sw.ElapsedMilliseconds}ms");
+            LogSzr.Debug($"Wrote string package in {sw.ElapsedMilliseconds}ms size {ByteHelpers.FormatBytes(_mappedStringsPackage.Length)}");
             LogSzr.Debug($"String hash is {ConvertToBase64Url(_stringMapHash)}");
         }
 
@@ -697,6 +652,17 @@ namespace Robust.Shared.Serialization
             }
 
             NetworkInitialize();
+        }
+
+        private sealed class InProgressHandshake
+        {
+            public readonly TaskCompletionSource<object?> Tcs;
+            public bool HasRequestedStrings;
+
+            public InProgressHandshake(TaskCompletionSource<object?> tcs)
+            {
+                Tcs = tcs;
+            }
         }
     }
 }

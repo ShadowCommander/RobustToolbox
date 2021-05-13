@@ -1,21 +1,18 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using JetBrains.Annotations;
-using Robust.Server.GameObjects.EntitySystems;
-using Robust.Server.Interfaces.Player;
 using Robust.Server.Player;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Components.UserInterface;
-using Robust.Shared.GameObjects.Systems;
-using Robust.Shared.Interfaces.Network;
 using Robust.Shared.Log;
+using Robust.Shared.Network;
 using Robust.Shared.Players;
 using Robust.Shared.Serialization;
+using Robust.Shared.Serialization.Manager.Attributes;
 
-namespace Robust.Server.GameObjects.Components.UserInterface
+namespace Robust.Server.GameObjects
 {
     /// <summary>
     ///     Contains a collection of entity-bound user interfaces that can be opened per client.
@@ -23,27 +20,24 @@ namespace Robust.Server.GameObjects.Components.UserInterface
     /// </summary>
     /// <seealso cref="BoundUserInterface"/>
     [PublicAPI]
-    public sealed class ServerUserInterfaceComponent : SharedUserInterfaceComponent
+    public sealed class ServerUserInterfaceComponent : SharedUserInterfaceComponent, ISerializationHooks
     {
         private readonly Dictionary<object, BoundUserInterface> _interfaces =
-            new Dictionary<object, BoundUserInterface>();
+            new();
+
+        [DataField("interfaces", readOnly: true)]
+        private List<PrototypeData> _interfaceData = new();
 
         /// <summary>
         ///     Enumeration of all the interfaces this component provides.
         /// </summary>
         public IEnumerable<BoundUserInterface> Interfaces => _interfaces.Values;
 
-        public override void ExposeData(ObjectSerializer serializer)
+        void ISerializationHooks.AfterDeserialization()
         {
-            base.ExposeData(serializer);
+            _interfaces.Clear();
 
-            if (!serializer.Reading)
-            {
-                return;
-            }
-
-            var data = serializer.ReadDataFieldCached("interfaces", new List<PrototypeData>());
-            foreach (var prototypeData in data)
+            foreach (var prototypeData in _interfaceData)
             {
                 _interfaces[prototypeData.UiKey] = new BoundUserInterface(prototypeData.UiKey, this);
             }
@@ -112,13 +106,13 @@ namespace Robust.Server.GameObjects.Components.UserInterface
 
         public object UiKey { get; }
         public ServerUserInterfaceComponent Owner { get; }
-        private readonly HashSet<IPlayerSession> _subscribedSessions = new HashSet<IPlayerSession>();
+        private readonly HashSet<IPlayerSession> _subscribedSessions = new();
         private BoundUserInterfaceState? _lastState;
 
         private bool _stateDirty;
 
         private readonly Dictionary<IPlayerSession, BoundUserInterfaceState> _playerStateOverrides =
-            new Dictionary<IPlayerSession, BoundUserInterfaceState>();
+            new();
 
         /// <summary>
         ///     All of the sessions currently subscribed to this UserInterface.
@@ -161,6 +155,29 @@ namespace Robust.Server.GameObjects.Components.UserInterface
             }
             _stateDirty = true;
         }
+
+
+        /// <summary>
+        ///     Switches between closed and open for a specific client.
+        /// </summary>
+        /// <param name="session">The player session to toggle the UI on.</param>
+        /// <exception cref="ArgumentException">
+        ///     Thrown if the session's status is <c>Connecting</c> or <c>Disconnected</c>
+        /// </exception>
+        /// <exception cref="ArgumentNullException">Thrown if <see cref="session"/> is null.</exception>
+        public void Toggle(IPlayerSession session)
+        {
+            if (_subscribedSessions.Contains(session))
+            {
+                Close(session);
+            }
+            else
+            {
+                Open(session);
+            }
+        }
+
+
 
         /// <summary>
         ///     Opens this interface for a specific client.
@@ -240,6 +257,7 @@ namespace Robust.Server.GameObjects.Components.UserInterface
             OnClosed?.Invoke(session);
             _subscribedSessions.Remove(session);
             _playerStateOverrides.Remove(session);
+            session.PlayerStatusChanged -= OnSessionOnPlayerStatusChanged;
 
             if (_subscribedSessions.Count == 0)
             {

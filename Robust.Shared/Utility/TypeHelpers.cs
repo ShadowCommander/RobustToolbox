@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace Robust.Shared.Utility
 {
@@ -17,8 +19,11 @@ namespace Robust.Shared.Utility
             // Even when you pass BindingFlags.NonPublic.
             foreach (var p in GetClassHierarchy(t))
             {
-                foreach (var field in p.GetFields(BindingFlags.NonPublic | BindingFlags.Instance |
-                                                  BindingFlags.DeclaredOnly | BindingFlags.Public))
+                foreach (var field in p.GetFields(
+                    BindingFlags.NonPublic |
+                    BindingFlags.Instance |
+                    BindingFlags.DeclaredOnly |
+                    BindingFlags.Public))
                 {
                     yield return field;
                 }
@@ -31,8 +36,11 @@ namespace Robust.Shared.Utility
         public static IEnumerable<PropertyInfo> GetAllProperties(this Type t)
         {
             return GetClassHierarchy(t).SelectMany(p =>
-                p.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly |
-                                BindingFlags.Public));
+                p.GetProperties(
+                    BindingFlags.NonPublic |
+                    BindingFlags.Instance |
+                    BindingFlags.DeclaredOnly |
+                    BindingFlags.Public));
         }
 
         /// <summary>
@@ -75,12 +83,112 @@ namespace Robust.Shared.Utility
         {
             foreach (var p in GetClassHierarchy(t))
             {
-                foreach (var field in p.GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Instance |
-                                                       BindingFlags.DeclaredOnly | BindingFlags.Public))
+                foreach (var field in p.GetNestedTypes(
+                    BindingFlags.NonPublic |
+                    BindingFlags.Instance |
+                    BindingFlags.DeclaredOnly |
+                    BindingFlags.Public))
                 {
                     yield return field;
                 }
             }
+        }
+
+        internal static readonly IComparer<Type> TypeInheritanceComparer = new TypeInheritanceComparerImpl();
+
+        public sealed class TypeInheritanceComparerImpl : IComparer<Type>
+        {
+            public int Compare(Type? x, Type? y)
+            {
+                if (x == null || y == null || x == y)
+                {
+                    return 0;
+                }
+
+                if (x.IsAssignableFrom(y))
+                {
+                    return -1;
+                }
+
+                if (y.IsAssignableFrom(x))
+                {
+                    return 1;
+                }
+
+                return 0;
+            }
+        }
+
+        public static IEnumerable<AbstractFieldInfo> GetAllPropertiesAndFields(this Type type)
+        {
+            foreach (var field in type.GetAllFields())
+            {
+                yield return new SpecificFieldInfo(field);
+            }
+
+            foreach (var property in type.GetAllProperties())
+            {
+                yield return new SpecificPropertyInfo(property);
+            }
+        }
+
+        public static Type? SelectCommonType(Type type1, Type type2)
+        {
+            Type? commonType = null;
+            if (type1.IsAssignableFrom(type2))
+            {
+                commonType = type1;
+            }else if (type2.IsAssignableFrom(type1))
+            {
+                commonType = type2;
+            }
+
+            return commonType;
+        }
+
+        public static SpecificFieldInfo? GetBackingField(this Type type, string propertyName)
+        {
+            foreach (var parent in type.GetClassHierarchy())
+            {
+                var field = parent.GetField($"<{propertyName}>k__BackingField",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+
+                if (field != null)
+                {
+                    return new SpecificFieldInfo(field);
+                }
+            }
+
+            return null;
+        }
+
+        public static bool HasBackingField(this Type type, string propertyName)
+        {
+            return type.GetBackingField(propertyName) != null;
+        }
+
+        public static bool TryGetBackingField(this Type type, string propertyName,
+            [NotNullWhen(true)] out SpecificFieldInfo? field)
+        {
+            return (field = type.GetBackingField(propertyName)) != null;
+        }
+
+        public static bool IsBackingField(this MemberInfo memberInfo)
+        {
+            return memberInfo.HasCustomAttribute<CompilerGeneratedAttribute>() &&
+                   memberInfo.Name.StartsWith("<") &&
+                   memberInfo.Name.EndsWith(">k__BackingField");
+        }
+
+        public static bool HasCustomAttribute<T>(this MemberInfo memberInfo) where T : Attribute
+        {
+            return memberInfo.GetCustomAttribute<T>() != null;
+        }
+
+        public static bool TryGetCustomAttribute<T>(this MemberInfo memberInfo, [NotNullWhen(true)] out T? attribute)
+            where T : Attribute
+        {
+            return (attribute = memberInfo.GetCustomAttribute<T>()) != null;
         }
     }
 }

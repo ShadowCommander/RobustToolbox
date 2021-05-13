@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
-using Robust.Client.Interfaces.ResourceManagement;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.CustomControls;
 using Robust.Shared.Maths;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
@@ -17,12 +18,12 @@ namespace Robust.Client.ViewVariables
     internal abstract class ViewVariablesInstance
     {
         public readonly IViewVariablesManagerInternal ViewVariablesManager;
-        protected readonly IResourceCache _resourceCache;
+        protected readonly IRobustSerializer _robustSerializer;
 
-        protected ViewVariablesInstance(IViewVariablesManagerInternal vvm, IResourceCache resCache)
+        protected ViewVariablesInstance(IViewVariablesManagerInternal vvm, IRobustSerializer robustSerializer)
         {
             ViewVariablesManager = vvm;
-            _resourceCache = resCache;
+            _robustSerializer = robustSerializer;
         }
 
         /// <summary>
@@ -51,13 +52,13 @@ namespace Robust.Client.ViewVariables
         {
         }
 
-        protected internal static IEnumerable<Control> LocalPropertyList(object obj, IViewVariablesManagerInternal vvm,
-            IResourceCache resCache)
+        protected internal static IEnumerable<IGrouping<Type, Control>> LocalPropertyList(object obj, IViewVariablesManagerInternal vvm,
+            IRobustSerializer robustSerializer)
         {
             var styleOther = false;
             var type = obj.GetType();
 
-            var members = new List<(MemberInfo, VVAccess, object? value, Action<object> onValueChanged, Type)>();
+            var members = new List<(MemberInfo, VVAccess, object? value, Action<object?, bool> onValueChanged, Type)>();
 
             foreach (var fieldInfo in type.GetAllFields())
             {
@@ -67,7 +68,7 @@ namespace Robust.Client.ViewVariables
                     continue;
                 }
 
-                members.Add((fieldInfo, attr.Access, fieldInfo.GetValue(obj), v => fieldInfo.SetValue(obj, v),
+                members.Add((fieldInfo, attr.Access, fieldInfo.GetValue(obj), (v, _) => fieldInfo.SetValue(obj, v),
                     fieldInfo.FieldType));
             }
 
@@ -85,29 +86,32 @@ namespace Robust.Client.ViewVariables
                 }
 
                 members.Add((propertyInfo, attr.Access, propertyInfo.GetValue(obj),
-                    v => propertyInfo.GetSetMethod(true)!.Invoke(obj, new[] {v}), propertyInfo.PropertyType));
+                    (v, _) => propertyInfo.GetSetMethod(true)!.Invoke(obj, new[] {v}), propertyInfo.PropertyType));
             }
 
-            members.Sort((a, b) => string.Compare(a.Item1.Name, b.Item1.Name, StringComparison.Ordinal));
-
-            foreach (var (memberInfo, access, value, onValueChanged, memberType) in members)
-            {
-                var data = new ViewVariablesBlobMembers.MemberData
+            var groupedSorted = members
+                .OrderBy(p => p.Item1.Name)
+                .GroupBy(p => p.Item1.DeclaringType!, tuple =>
                 {
-                    Editable = access == VVAccess.ReadWrite,
-                    Name = memberInfo.Name,
-                    Type = memberType.AssemblyQualifiedName,
-                    TypePretty = TypeAbbreviation.Abbreviate(memberType),
-                    Value = value
-                };
+                    var (memberInfo, access, value, onValueChanged, memberType) = tuple;
+                    var data = new ViewVariablesBlobMembers.MemberData
+                    {
+                        Editable = access == VVAccess.ReadWrite,
+                        Name = memberInfo.Name,
+                        Type = memberType.AssemblyQualifiedName,
+                        TypePretty = TypeAbbreviation.Abbreviate(memberType),
+                        Value = value
+                    };
 
-                var propertyEdit = new ViewVariablesPropertyControl(vvm, resCache);
-                propertyEdit.SetStyle(styleOther = !styleOther);
-                var editor = propertyEdit.SetProperty(data);
-                editor.OnValueChanged += onValueChanged;
+                    var propertyEdit = new ViewVariablesPropertyControl(vvm, robustSerializer);
+                    propertyEdit.SetStyle(styleOther = !styleOther);
+                    var editor = propertyEdit.SetProperty(data);
+                    editor.OnValueChanged += onValueChanged;
+                    return propertyEdit;
+                })
+                .OrderByDescending(p => p.Key, TypeHelpers.TypeInheritanceComparer);
 
-                yield return propertyEdit;
-            }
+            return groupedSorted;
         }
 
         protected static Control MakeTopBar(string top, string bottom)

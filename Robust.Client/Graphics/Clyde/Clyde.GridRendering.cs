@@ -2,8 +2,7 @@
 using System.Buffers;
 using System.Collections.Generic;
 using OpenToolkit.Graphics.OpenGL4;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.GameObjects.Components;
+using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
@@ -14,11 +13,11 @@ namespace Robust.Client.Graphics.Clyde
     {
         [Dependency] private readonly IEntityManager _entityManager = default!;
 
-        private readonly Dictionary<GridId, Dictionary<MapIndices, MapChunkData>> _mapChunkData =
-            new Dictionary<GridId, Dictionary<MapIndices, MapChunkData>>();
+        private readonly Dictionary<GridId, Dictionary<Vector2i, MapChunkData>> _mapChunkData =
+            new();
 
         private int _verticesPerChunk(IMapChunk chunk) => chunk.ChunkSize * chunk.ChunkSize * 4;
-        private int _indicesPerChunk(IMapChunk chunk) => chunk.ChunkSize * chunk.ChunkSize * 5;
+        private int _indicesPerChunk(IMapChunk chunk) => chunk.ChunkSize * chunk.ChunkSize * GetQuadBatchIndexCount();
 
         private void _drawGrids(Box2 worldBounds)
         {
@@ -34,6 +33,7 @@ namespace Robust.Client.Graphics.Clyde
             SetTexture(TextureUnit.Texture1, _lightingReady ? _currentViewport!.LightRenderTarget.Texture : _stockTextureWhite);
 
             var (gridProgram, _) = ActivateShaderInstance(_defaultShader.Handle);
+            SetupGlobalUniformsImmediate(gridProgram, (ClydeTexture) _tileDefinitionManager.TileTextureAtlas);
 
             gridProgram.SetUniformTextureMaybe(UniIMainTexture, TextureUnit.Texture0);
             gridProgram.SetUniformTextureMaybe(UniILightTexture, TextureUnit.Texture1);
@@ -73,11 +73,11 @@ namespace Robust.Client.Graphics.Clyde
                         continue;
                     }
 
-                    GL.BindVertexArray(datum.VAO);
+                    BindVertexArray(datum.VAO);
                     CheckGlError();
 
                     _debugStats.LastGLDrawCalls += 1;
-                    GL.DrawElements(BeginMode.TriangleStrip, datum.TileCount * 5, DrawElementsType.UnsignedShort, 0);
+                    GL.DrawElements(GetQuadGLPrimitiveType(), datum.TileCount * GetQuadBatchIndexCount(), DrawElementsType.UnsignedShort, 0);
                     CheckGlError();
                 }
             }
@@ -112,17 +112,13 @@ namespace Robust.Client.Graphics.Clyde
                     var region = regionMaybe.Value;
 
                     var vIdx = i * 4;
-                    vertexBuffer[vIdx + 0] = new Vertex2D(tile.X + 1, tile.Y + 1, region.Right, region.Top);
-                    vertexBuffer[vIdx + 1] = new Vertex2D(tile.X, tile.Y + 1, region.Left, region.Top);
-                    vertexBuffer[vIdx + 2] = new Vertex2D(tile.X + 1, tile.Y, region.Right, region.Bottom);
-                    vertexBuffer[vIdx + 3] = new Vertex2D(tile.X, tile.Y, region.Left, region.Bottom);
-                    var nIdx = i * 5;
+                    vertexBuffer[vIdx + 0] = new Vertex2D(tile.X, tile.Y, region.Left, region.Bottom);
+                    vertexBuffer[vIdx + 1] = new Vertex2D(tile.X + 1, tile.Y, region.Right, region.Bottom);
+                    vertexBuffer[vIdx + 2] = new Vertex2D(tile.X + 1, tile.Y + 1, region.Right, region.Top);
+                    vertexBuffer[vIdx + 3] = new Vertex2D(tile.X, tile.Y + 1, region.Left, region.Top);
+                    var nIdx = i * GetQuadBatchIndexCount();
                     var tIdx = (ushort) (i * 4);
-                    indexBuffer[nIdx + 0] = tIdx;
-                    indexBuffer[nIdx + 1] = (ushort) (tIdx + 1);
-                    indexBuffer[nIdx + 2] = (ushort) (tIdx + 2);
-                    indexBuffer[nIdx + 3] = (ushort) (tIdx + 3);
-                    indexBuffer[nIdx + 4] = ushort.MaxValue;
+                    QuadBatchIndexWrite(indexBuffer, ref nIdx, tIdx);
                     i += 1;
                 }
 
@@ -130,7 +126,7 @@ namespace Robust.Client.Graphics.Clyde
                 CheckGlError();
                 datum.EBO.Use();
                 datum.VBO.Use();
-                datum.EBO.Reallocate(new Span<ushort>(indexBuffer, 0, i * 5));
+                datum.EBO.Reallocate(new Span<ushort>(indexBuffer, 0, i * GetQuadBatchIndexCount()));
                 datum.VBO.Reallocate(new Span<Vertex2D>(vertexBuffer, 0, i * 4));
                 datum.Dirty = false;
                 datum.TileCount = i;
@@ -144,8 +140,8 @@ namespace Robust.Client.Graphics.Clyde
 
         private MapChunkData _initChunkBuffers(IMapGrid grid, IMapChunk chunk)
         {
-            var vao = (uint)GL.GenVertexArray();
-            GL.BindVertexArray(vao);
+            var vao = GenVertexArray();
+            BindVertexArray(vao);
             CheckGlError();
 
             var vboSize = _verticesPerChunk(chunk) * Vertex2D.SizeOf;
@@ -185,7 +181,7 @@ namespace Robust.Client.Graphics.Clyde
             return !data.TryGetValue(chunk.Indices, out var datum) || datum.Dirty;
         }
 
-        public void _setChunkDirty(IMapGrid grid, MapIndices chunk)
+        public void _setChunkDirty(IMapGrid grid, Vector2i chunk)
         {
             var data = _mapChunkData[grid.Index];
             if (data.TryGetValue(chunk, out var datum))
@@ -208,21 +204,21 @@ namespace Robust.Client.Graphics.Clyde
         private void _updateTileMapOnUpdate(object? sender, TileChangedEventArgs args)
         {
             var grid = _mapManager.GetGrid(args.NewTile.GridIndex);
-            var chunk = grid.GridTileToChunkIndices(new MapIndices(args.NewTile.X, args.NewTile.Y));
+            var chunk = grid.GridTileToChunkIndices(new Vector2i(args.NewTile.X, args.NewTile.Y));
             _setChunkDirty(grid, chunk);
         }
 
-        private void _updateOnGridCreated(GridId gridId)
+        private void _updateOnGridCreated(MapId mapId, GridId gridId)
         {
-            _mapChunkData.Add(gridId, new Dictionary<MapIndices, MapChunkData>());
+            _mapChunkData.Add(gridId, new Dictionary<Vector2i, MapChunkData>());
         }
 
-        private void _updateOnGridRemoved(GridId gridId)
+        private void _updateOnGridRemoved(MapId mapId, GridId gridId)
         {
             var data = _mapChunkData[gridId];
             foreach (var chunkDatum in data.Values)
             {
-                GL.DeleteVertexArray(chunkDatum.VAO);
+                DeleteVertexArray(chunkDatum.VAO);
                 CheckGlError();
                 chunkDatum.VBO.Delete();
                 chunkDatum.EBO.Delete();

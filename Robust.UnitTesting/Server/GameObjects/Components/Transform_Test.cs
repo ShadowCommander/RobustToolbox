@@ -1,15 +1,17 @@
-﻿using System.IO;
+using System.IO;
 using System.Reflection;
+using Moq;
 using NUnit.Framework;
-using Robust.Server.Interfaces.GameObjects;
-using Robust.Shared.GameObjects.Components.Transform;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Map;
-using Robust.Shared.Interfaces.Timing;
+using Robust.Server.GameObjects;
+using Robust.Server.Physics;
+using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Physics.Broadphase;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Serialization.Manager;
+using Robust.Shared.Timing;
 
 namespace Robust.UnitTesting.Server.GameObjects.Components
 {
@@ -43,21 +45,28 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
         private MapId MapB;
         private IMapGrid GridB = default!;
 
-        private static readonly GridCoordinates InitialPos = new GridCoordinates(0,0,new GridId(1));
+        private static readonly EntityCoordinates InitialPos = new(new EntityUid(1), (0, 0));
+
+        protected override void OverrideIoC()
+        {
+            base.OverrideIoC();
+            var mock = new Mock<IEntitySystemManager>();
+            var broady = new BroadPhaseSystem();
+            var physics = new PhysicsSystem();
+            mock.Setup(m => m.GetEntitySystem<SharedBroadPhaseSystem>()).Returns(broady);
+            mock.Setup(m => m.GetEntitySystem<SharedPhysicsSystem>()).Returns(physics);
+
+            IoCManager.RegisterInstance<IEntitySystemManager>(mock.Object, true);
+        }
 
         [OneTimeSetUp]
         public void Setup()
         {
-            var compMan = IoCManager.Resolve<IComponentManager>();
-            compMan.Initialize();
-
             EntityManager = IoCManager.Resolve<IServerEntityManagerInternal>();
             MapManager = IoCManager.Resolve<IMapManager>();
-            MapManager.Initialize();
-            MapManager.Startup();
-
             MapManager.CreateMap();
 
+            IoCManager.Resolve<ISerializationManager>().Initialize();
             var manager = IoCManager.Resolve<IPrototypeManager>();
             manager.LoadFromStream(new StringReader(PROTOTYPES));
             manager.Resync();
@@ -90,8 +99,8 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             var childTrans = child.Transform;
 
             // that are not on the same map
-            parentTrans.GridPosition = new GridCoordinates(5, 5, GridA);
-            childTrans.GridPosition = new GridCoordinates(4, 4, GridB);
+            parentTrans.Coordinates = new EntityCoordinates(GridA.GridEntityId, (5, 5));
+            childTrans.Coordinates = new EntityCoordinates(GridB.GridEntityId, (4, 4));
 
             // if they are parented, the child keeps its world position, but moves to the parents map
             childTrans.AttachParent(parentTrans);
@@ -101,18 +110,18 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             {
                 Assert.That(childTrans.MapID, Is.EqualTo(parentTrans.MapID));
                 Assert.That(childTrans.GridID, Is.EqualTo(parentTrans.GridID));
-                Assert.That(childTrans.GridPosition, Is.EqualTo(new GridCoordinates(4, 4, GridA)));
+                Assert.That(childTrans.Coordinates, Is.EqualTo(new EntityCoordinates(parentTrans.Owner.Uid, (-1, -1))));
                 Assert.That(childTrans.WorldPosition, Is.EqualTo(new Vector2(4, 4)));
             });
 
             // move the parent, and the child should move with it
-            childTrans.WorldPosition = new Vector2(6, 6);
-            parentTrans.WorldPosition += new Vector2(-7, -7);
+            childTrans.LocalPosition = new Vector2(6, 6);
+            parentTrans.WorldPosition = new Vector2(-8, -8);
 
-            Assert.That(childTrans.WorldPosition, Is.EqualTo(new Vector2(-1, -1)));
+            Assert.That(childTrans.WorldPosition, Is.EqualTo(new Vector2(-2, -2)));
 
             // if we detach parent, the child should be left where it was, still relative to parents grid
-            var oldLpos = childTrans.GridPosition;
+            var oldLpos = new Vector2(-2, -2);
             var oldWpos = childTrans.WorldPosition;
 
             childTrans.AttachToGridOrMap();
@@ -121,7 +130,7 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
 
             Assert.Multiple(() =>
             {
-                Assert.That(childTrans.GridPosition.Position, Is.EqualTo(oldLpos.Position));
+                Assert.That(childTrans.Coordinates.Position, Is.EqualTo(oldLpos));
                 Assert.That(childTrans.WorldPosition, Is.EqualTo(oldWpos));
             });
         }
@@ -147,6 +156,40 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
 
             // Assert
             Assert.That(oldWpos == newWpos);
+        }
+
+        /// <summary>
+        ///     Tests that a child entity does not move when attaching to a parent.
+        /// </summary>
+        [Test]
+        public void ParentDoubleAttachMoveTest()
+        {
+            // Arrange
+            var parent = EntityManager.SpawnEntity("dummy", InitialPos);
+            var childOne = EntityManager.SpawnEntity("dummy", InitialPos);
+            var childTwo = EntityManager.SpawnEntity("dummy", InitialPos);
+            var parentTrans = parent.Transform;
+            var childOneTrans = childOne.Transform;
+            var childTwoTrans = childTwo.Transform;
+            parentTrans.WorldPosition = new Vector2(1, 1);
+            childOneTrans.WorldPosition = new Vector2(2, 2);
+            childTwoTrans.WorldPosition = new Vector2(3, 3);
+
+            // Act
+            var oldWpos = childOneTrans.WorldPosition;
+            childOneTrans.AttachParent(parentTrans);
+            var newWpos = childOneTrans.WorldPosition;
+            Assert.That(oldWpos, Is.EqualTo(newWpos));
+
+            oldWpos = childTwoTrans.WorldPosition;
+            childTwoTrans.AttachParent(parentTrans);
+            newWpos = childTwoTrans.WorldPosition;
+            Assert.That(oldWpos, Is.EqualTo(newWpos));
+
+            oldWpos = childTwoTrans.WorldPosition;
+            childTwoTrans.AttachParent(childOneTrans);
+            newWpos = childTwoTrans.WorldPosition;
+            Assert.That(oldWpos, Is.EqualTo(newWpos));
         }
 
         /// <summary>
@@ -246,7 +289,7 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
         ///     Tests to see if setting the world position of a child causes position rounding errors.
         /// </summary>
         [Test]
-        public void ParentWorldPositionRoundingErrorTest()
+        public void ParentLocalPositionRoundingErrorTest()
         {
             // Arrange
             var node1 = EntityManager.SpawnEntity("dummy", InitialPos);
@@ -270,9 +313,9 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             for (var i = 0; i < 10000; i++)
             {
                 var dx = i % 2 == 0 ? 5 : -5;
-                node1Trans.WorldPosition += new Vector2(dx, dx);
-                node2Trans.WorldPosition += new Vector2(dx, dx);
-                node3Trans.WorldPosition += new Vector2(dx, dx);
+                node1Trans.LocalPosition += new Vector2(dx, dx);
+                node2Trans.LocalPosition += new Vector2(dx, dx);
+                node3Trans.LocalPosition += new Vector2(dx, dx);
             }
 
             var newWpos = node3Trans.WorldPosition;
@@ -280,7 +323,7 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             // Assert
             Assert.Multiple(() =>
             {
-                Assert.That(MathHelper.CloseTo(oldWpos.X, newWpos.Y), newWpos.ToString);
+                Assert.That(MathHelper.CloseTo(oldWpos.X, newWpos.Y), $"{oldWpos.X} should be {newWpos.Y}");
                 Assert.That(MathHelper.CloseTo(oldWpos.Y, newWpos.Y), newWpos.ToString);
             });
         }

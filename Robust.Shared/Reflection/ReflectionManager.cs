@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
-using Robust.Shared.Interfaces.Reflection;
 using Robust.Shared.Log;
+using Robust.Shared.Serialization;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.Reflection
@@ -20,12 +20,18 @@ namespace Robust.Shared.Reflection
         /// </remarks>
         protected abstract IEnumerable<string> TypePrefixes { get; }
 
-        private readonly List<Assembly> assemblies = new List<Assembly>();
+        private readonly List<Assembly> assemblies = new();
 
         public event EventHandler<ReflectionUpdateEventArgs>? OnAssemblyAdded;
 
         [ViewVariables]
         public IReadOnlyList<Assembly> Assemblies => assemblies;
+
+        private readonly Dictionary<(Type baseType, string typeName), Type?> _yamlTypeTagCache = new();
+
+        private readonly Dictionary<string, Type> _looseTypeCache = new();
+
+        private readonly Dictionary<string, Enum> _enumCache = new();
 
         /// <inheritdoc />
         public IEnumerable<Type> GetAllChildren<T>(bool inclusive = false)
@@ -132,6 +138,9 @@ namespace Robust.Shared.Reflection
 
         public bool TryLooseGetType(string name, [NotNullWhen(true)] out Type? type)
         {
+            if (_looseTypeCache.TryGetValue(name, out type))
+                return true;
+
             foreach (var assembly in assemblies)
             {
                 foreach (var tryType in assembly.DefinedTypes)
@@ -139,6 +148,7 @@ namespace Robust.Shared.Reflection
                     if (tryType.FullName!.EndsWith(name))
                     {
                         type = tryType;
+                        _looseTypeCache[name] = type;
                         return true;
                     }
                 }
@@ -149,13 +159,19 @@ namespace Robust.Shared.Reflection
         }
 
         /// <inheritdoc />
-        public IEnumerable<Type> FindTypesWithAttribute<T>()
+        public IEnumerable<Type> FindTypesWithAttribute<T>() where T : Attribute
+        {
+            return FindTypesWithAttribute(typeof(T));
+        }
+
+        /// <inheritdoc />
+        public IEnumerable<Type> FindTypesWithAttribute(Type attributeType)
         {
             var types = new List<Type>();
 
             foreach (var assembly in Assemblies)
             {
-                types.AddRange(assembly.GetTypes().Where(type => Attribute.IsDefined(type, typeof(T))));
+                types.AddRange(assembly.GetTypes().Where(type => Attribute.IsDefined(type, attributeType)));
             }
 
             return types;
@@ -171,8 +187,13 @@ namespace Robust.Shared.Reflection
             }
 
             reference = reference.Substring(5);
+
+            if (_enumCache.TryGetValue(reference, out @enum))
+                return true;
+
             var dotIndex = reference.LastIndexOf('.');
             var typeName = reference.Substring(0, dotIndex);
+
             var value = reference.Substring(dotIndex + 1);
 
             foreach (var assembly in assemblies)
@@ -185,11 +206,47 @@ namespace Robust.Shared.Reflection
                     }
 
                     @enum = (Enum) Enum.Parse(type, value);
+                    _enumCache[reference] = @enum;
                     return true;
                 }
             }
 
             throw new ArgumentException("Could not resolve enum reference.");
+        }
+
+        public Type? YamlTypeTagLookup(Type baseType, string typeName)
+        {
+            if (_yamlTypeTagCache.TryGetValue((baseType, typeName), out var type))
+            {
+                return type;
+            }
+
+            Type? found = null;
+            foreach (var derivedType in GetAllChildren(baseType))
+            {
+                if (!derivedType.IsPublic)
+                {
+                    continue;
+                }
+
+                if (derivedType.Name == typeName)
+                {
+                    found = derivedType;
+                    break;
+                }
+
+                var serializedAttribute = derivedType.GetCustomAttribute<SerializedTypeAttribute>();
+
+                if (serializedAttribute != null &&
+                    serializedAttribute.SerializeName == typeName)
+                {
+                    found = derivedType;
+                    break;
+                }
+            }
+
+            _yamlTypeTagCache.Add((baseType, typeName), found);
+            return found;
         }
     }
 }

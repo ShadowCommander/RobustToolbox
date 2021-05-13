@@ -1,17 +1,15 @@
-﻿using System;
-using Robust.Server.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.Map;
-using Robust.Server.Interfaces.Placement;
-using Robust.Server.Interfaces.Player;
-using Robust.Shared.Interfaces.GameObjects;
+using System;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using System.Collections.Generic;
 using System.Linq;
+using Robust.Server.GameObjects;
+using Robust.Server.Player;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.Network;
+using Robust.Shared.Log;
 using Robust.Shared.Maths;
+using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
 
 namespace Robust.Server.Placement
@@ -26,7 +24,7 @@ namespace Robust.Server.Placement
 
         //TO-DO: Expand for multiple permission per mob?
         //       Add support for multi-use placeables (tiles etc.).
-        public List<PlacementInformation> BuildPermissions { get; set; } = new List<PlacementInformation>();
+        public List<PlacementInformation> BuildPermissions { get; set; } = new();
 
         //Holds build permissions for all mobs. A list of mobs and the objects they're allowed to request and how. One permission per mob.
 
@@ -61,6 +59,9 @@ namespace Robust.Server.Placement
                 case PlacementManagerMessage.RequestEntRemove:
                     HandleEntRemoveReq(msg.EntityUid);
                     break;
+                case PlacementManagerMessage.RequestRectRemove:
+                    HandleRectRemoveReq(msg);
+                    break;
             }
         }
 
@@ -86,8 +87,14 @@ namespace Robust.Server.Placement
 
             //TODO: Distance check, so you can't place things off of screen.
 
-            var coordinates = msg.GridCoordinates;
+            var coordinates = msg.EntityCoordinates;
 
+            if (!coordinates.IsValid(_entityManager))
+            {
+                Logger.WarningS("placement",
+                    $"{session} tried to place {msg.ObjType} at invalid coordinate {coordinates}");
+                return;
+            }
 
             /* TODO: Redesign permission system, or document what this is supposed to be doing
             var permission = GetPermission(session.attachedEntity.Uid, alignRcv);
@@ -118,7 +125,7 @@ namespace Robust.Server.Placement
             }
             else
             {
-                var mapCoords = coordinates.ToMap(_mapManager);
+                var mapCoords = coordinates.ToMap(_entityManager);
                 PlaceNewTile(tileType, mapCoords.MapId, mapCoords.Position);
             }
         }
@@ -152,7 +159,13 @@ namespace Robust.Server.Placement
             if (closest != null) // stick to existing grid
             {
                 // round to nearest cardinal dir
-                var normal = new Angle(position - intersect.Center).GetCardinalDir().ToVec();
+                var deltaVec = position - intersect.Center;
+                var normal = new Vector2(0,0);
+                if (deltaVec != Vector2.Zero)
+                {
+                    normal = new Angle(deltaVec).GetCardinalDir().ToVec();
+                }
+
 
                 // round coords to center of tile
                 var tileIndices = closest.WorldToTile(intersect.Center);
@@ -190,6 +203,19 @@ namespace Robust.Server.Placement
             //TODO: Some form of admin check
             if (_entityManager.TryGetEntity(entityUid, out var entity))
                 _entityManager.DeleteEntity(entity);
+        }
+
+        private void HandleRectRemoveReq(MsgPlacement msg)
+        {
+            EntityCoordinates start = msg.EntityCoordinates;
+            Vector2 rectSize = msg.RectSize;
+            foreach (IEntity entity in IoCManager.Resolve<IEntityLookup>().GetEntitiesIntersecting(start.GetMapId(_entityManager),
+                new Box2(start.Position, start.Position + rectSize)))
+            {
+                if (entity.Deleted || entity.HasComponent<IMapGridComponent>() || entity.HasComponent<IActorComponent>())
+                    continue;
+                entity.Delete();
+            }
         }
 
         /// <summary>

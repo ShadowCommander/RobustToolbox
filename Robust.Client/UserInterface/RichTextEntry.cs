@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using JetBrains.Annotations;
 using Robust.Client.Graphics;
-using Robust.Client.Graphics.Drawing;
 using Robust.Client.UserInterface.Controls;
+using Robust.Shared.Log;
 using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 
@@ -15,7 +16,7 @@ namespace Robust.Client.UserInterface
     internal struct RichTextEntry
     {
         private static readonly FormattedMessage.TagColor TagBaseColor
-            = new FormattedMessage.TagColor(new Color(200, 200, 200));
+            = new(new Color(200, 200, 200));
 
         public readonly FormattedMessage Message;
 
@@ -65,7 +66,7 @@ namespace Robust.Client.UserInterface
             var wordSizePixels = 0;
             // The horizontal position of the text cursor.
             var posX = 0;
-            var lastChar = 'A';
+            var lastRune = new Rune('A');
             // If a word is larger than maxSizeX, we split it.
             // We need to keep track of some data to split it into two words.
             (int breakIndex, int wordSizePixels)? forceSplitData = null;
@@ -83,14 +84,14 @@ namespace Robust.Client.UserInterface
 
                 var text = tagText.Text;
                 // And go over every character.
-                for (var i = 0; i < text.Length; i++, breakIndexCounter++)
+                foreach (var rune in text.EnumerateRunes())
                 {
-                    var chr = text[i];
+                    breakIndexCounter += 1;
 
-                    if (IsWordBoundary(lastChar, chr) || chr == '\n')
+                    if (IsWordBoundary(lastRune, rune) || rune == new Rune('\n'))
                     {
                         // Word boundary means we know where the word ends.
-                        if (posX > maxSizeX && lastChar != ' ')
+                        if (posX > maxSizeX && lastRune != new Rune(' '))
                         {
                             DebugTools.Assert(wordStartBreakIndex.HasValue,
                                 "wordStartBreakIndex can only be null if the word begins at a new line, in which case this branch shouldn't be reached as the word would be split due to being longer than a single line.");
@@ -109,22 +110,22 @@ namespace Robust.Client.UserInterface
                         forceSplitData = null;
 
                         // Just manually handle newlines.
-                        if (chr == '\n')
+                        if (rune == new Rune('\n'))
                         {
                             LineBreaks.Add(breakIndexCounter);
                             Height += font.GetLineHeight(uiScale);
                             maxUsedWidth = Math.Max(maxUsedWidth, posX);
                             posX = 0;
-                            lastChar = chr;
+                            lastRune = rune;
                             wordStartBreakIndex = null;
                             continue;
                         }
                     }
 
                     // Uh just skip unknown characters I guess.
-                    if (!font.TryGetCharMetrics(chr, uiScale, out var metrics))
+                    if (!font.TryGetCharMetrics(rune, uiScale, out var metrics))
                     {
-                        lastChar = chr;
+                        lastRune = rune;
                         continue;
                     }
 
@@ -165,15 +166,36 @@ namespace Robust.Client.UserInterface
                         }
                     }
 
-                    lastChar = chr;
+                    lastRune = rune;
                 }
             }
 
             // This needs to happen because word wrapping doesn't get checked for the last word.
             if (posX > maxSizeX)
             {
-                DebugTools.Assert(wordStartBreakIndex.HasValue,
-                    "wordStartBreakIndex can only be null if the word begins at a new line, in which case this branch shouldn't be reached as the word would be split due to being longer than a single line.");
+                if (!wordStartBreakIndex.HasValue)
+                {
+                    Logger.Error(
+                        "Assert fail inside RichTextEntry.Update, " +
+                        "wordStartBreakIndex is null on method end w/ word wrap required. " +
+                        "Dumping relevant stuff. Send this to PJB.");
+                    Logger.Error($"Message: {Message}");
+                    Logger.Error($"maxSizeX: {maxSizeX}");
+                    Logger.Error($"maxUsedWidth: {maxUsedWidth}");
+                    Logger.Error($"breakIndexCounter: {breakIndexCounter}");
+                    Logger.Error("wordStartBreakIndex: null (duh)");
+                    Logger.Error($"wordSizePixels: {wordSizePixels}");
+                    Logger.Error($"posX: {posX}");
+                    Logger.Error($"lastChar: {lastRune}");
+                    Logger.Error($"forceSplitData: {forceSplitData}");
+                    Logger.Error($"LineBreaks: {string.Join(", ", LineBreaks)}");
+
+                    throw new Exception(
+                        "wordStartBreakIndex can only be null if the word begins at a new line," +
+                        "in which case this branch shouldn't be reached as" +
+                        "the word would be split due to being longer than a single line.");
+                }
+
                 LineBreaks.Add(wordStartBreakIndex!.Value.index);
                 Height += font.GetLineHeight(uiScale);
                 maxUsedWidth = Math.Max(maxUsedWidth, wordStartBreakIndex.Value.lineSize);
@@ -226,9 +248,10 @@ namespace Robust.Client.UserInterface
                     case FormattedMessage.TagText tagText:
                     {
                         var text = tagText.Text;
-                        for (var i = 0; i < text.Length; i++, globalBreakCounter++)
+                        foreach (var rune in text.EnumerateRunes())
                         {
-                            var chr = text[i];
+                            globalBreakCounter += 1;
+
                             if (lineBreakIndex < LineBreaks.Count &&
                                 LineBreaks[lineBreakIndex] == globalBreakCounter)
                             {
@@ -236,7 +259,7 @@ namespace Robust.Client.UserInterface
                                 lineBreakIndex += 1;
                             }
 
-                            var advance = font.DrawChar(handle, chr, baseLine, uiScale, currentColorTag.Color);
+                            var advance = font.DrawChar(handle, rune, baseLine, uiScale, currentColorTag.Color);
                             baseLine += new Vector2(advance, 0);
                         }
 
@@ -247,9 +270,9 @@ namespace Robust.Client.UserInterface
         }
 
         [Pure]
-        private static bool IsWordBoundary(char a, char b)
+        private static bool IsWordBoundary(Rune a, Rune b)
         {
-            return a == ' ' || b == ' ' || a == '-' || b == '-';
+            return a == new Rune(' ') || b == new Rune(' ') || a == new Rune('-') || b == new Rune('-');
         }
     }
 }

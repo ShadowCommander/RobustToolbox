@@ -1,18 +1,17 @@
-﻿using Robust.Shared.Interfaces.Log;
-using System;
+﻿using System;
 using System.IO;
 using Robust.Shared.Utility;
 using Serilog.Events;
 
 namespace Robust.Shared.Log
 {
-    public sealed class FileLogHandler : ILogHandler, IDisposable
+    internal sealed class FileLogHandler : ILogHandler, IDisposable
     {
         private readonly TextWriter writer;
 
         public FileLogHandler(string path)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             writer = TextWriter.Synchronized(new StreamWriter(path, true, EncodingHelpers.UTF8));
         }
 

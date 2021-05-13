@@ -1,7 +1,8 @@
-﻿using Robust.Client.Interfaces.ResourceManagement;
+﻿using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
-using Robust.Client.ViewVariables.Editors;
 using Robust.Client.ViewVariables.Instances;
+using Robust.Shared.Maths;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
@@ -10,7 +11,7 @@ namespace Robust.Client.ViewVariables.Traits
     internal class ViewVariablesTraitMembers : ViewVariablesTrait
     {
         private readonly IViewVariablesManagerInternal _vvm;
-        private readonly IResourceCache _resourceCache;
+        private readonly IRobustSerializer _robustSerializer;
 
         private VBoxContainer _memberList = default!;
 
@@ -21,9 +22,9 @@ namespace Robust.Client.ViewVariables.Traits
             instance.AddTab("Members", _memberList);
         }
 
-        public ViewVariablesTraitMembers(IViewVariablesManagerInternal vvm, IResourceCache resourceCache)
+        public ViewVariablesTraitMembers(IViewVariablesManagerInternal vvm, IRobustSerializer robustSerializer)
         {
-            _resourceCache = resourceCache;
+            _robustSerializer = robustSerializer;
             _vvm = vvm;
         }
 
@@ -33,10 +34,19 @@ namespace Robust.Client.ViewVariables.Traits
 
             if (Instance.Object != null)
             {
-                foreach (var control in ViewVariablesInstance.LocalPropertyList(Instance.Object,
-                    Instance.ViewVariablesManager, _resourceCache))
+                var first = true;
+                foreach (var group in ViewVariablesInstance.LocalPropertyList(Instance.Object,
+                    Instance.ViewVariablesManager, _robustSerializer))
                 {
-                    _memberList.AddChild(control);
+                    CreateMemberGroupHeader(
+                        ref first,
+                        TypeAbbreviation.Abbreviate(group.Key),
+                        _memberList);
+
+                    foreach (var control in group)
+                    {
+                        _memberList.AddChild(control);
+                    }
                 }
             }
             else
@@ -47,23 +57,40 @@ namespace Robust.Client.ViewVariables.Traits
                     Instance.Session!, new ViewVariablesRequestMembers());
 
                 var otherStyle = false;
-                foreach (var propertyData in blob.Members)
+                var first = true;
+                foreach (var (groupName, groupMembers) in blob.MemberGroups)
                 {
-                    var propertyEdit = new ViewVariablesPropertyControl(_vvm, _resourceCache);
-                    propertyEdit.SetStyle(otherStyle = !otherStyle);
-                    var editor = propertyEdit.SetProperty(propertyData);
-                    
-                    var selectorChain = new object[] {new ViewVariablesMemberSelector(propertyData.PropertyIndex)};
-                    editor.WireNetworkSelector(Instance.Session!.SessionId, selectorChain);
-                    editor.OnValueChanged += o =>
-                    {
-                        Instance.ViewVariablesManager.ModifyRemote(Instance.Session!,
-                            selectorChain, o);
-                    };
+                    CreateMemberGroupHeader(ref first, groupName, _memberList);
 
-                    _memberList.AddChild(propertyEdit);
+                    foreach (var propertyData in groupMembers)
+                    {
+                        var propertyEdit = new ViewVariablesPropertyControl(_vvm, _robustSerializer);
+                        propertyEdit.SetStyle(otherStyle = !otherStyle);
+                        var editor = propertyEdit.SetProperty(propertyData);
+
+                        var selectorChain = new object[] {new ViewVariablesMemberSelector(propertyData.PropertyIndex)};
+                        editor.WireNetworkSelector(Instance.Session!.SessionId, selectorChain);
+                        editor.OnValueChanged += (o, r) =>
+                        {
+                            Instance.ViewVariablesManager.ModifyRemote(Instance.Session!,
+                                selectorChain, o, r);
+                        };
+
+                        _memberList.AddChild(propertyEdit);
+                    }
                 }
             }
+        }
+
+        internal static void CreateMemberGroupHeader(ref bool first, string groupName, Control container)
+        {
+            if (!first)
+            {
+                container.AddChild(new Control {MinSize = (0, 16)});
+            }
+
+            first = false;
+            container.AddChild(new Label {Text = groupName, FontColorOverride = Color.DarkGray});
         }
     }
 }

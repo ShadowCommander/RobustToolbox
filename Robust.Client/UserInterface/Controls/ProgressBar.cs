@@ -1,5 +1,5 @@
 ﻿using System.Diagnostics.Contracts;
-using Robust.Client.Graphics.Drawing;
+using Robust.Client.Graphics;
 using Robust.Shared.Maths;
 
 namespace Robust.Client.UserInterface.Controls
@@ -18,7 +18,7 @@ namespace Robust.Client.UserInterface.Controls
             set
             {
                 _backgroundStyleBoxOverride = value;
-                MinimumSizeChanged();
+                InvalidateMeasure();
             }
         }
 
@@ -28,7 +28,7 @@ namespace Robust.Client.UserInterface.Controls
             set
             {
                 _foregroundStyleBoxOverride = value;
-                MinimumSizeChanged();
+                InvalidateMeasure();
             }
         }
 
@@ -61,7 +61,7 @@ namespace Robust.Client.UserInterface.Controls
             base.Draw(handle);
 
             var bg = _getBackground();
-            bg?.Draw(handle, SizeBox);
+            bg?.Draw(handle, PixelSizeBox);
 
             var fg = _getForeground();
             if (fg == null)
@@ -69,14 +69,14 @@ namespace Robust.Client.UserInterface.Controls
                 return;
             }
             var minSize = fg.MinimumSize;
-            var size = Width * GetAsRatio() - minSize.X;
+            var size = PixelWidth * GetAsRatio() - minSize.X;
             if (size > 0)
             {
-                fg.Draw(handle, UIBox2.FromDimensions(0, 0, minSize.X + size, Height));
+                fg.Draw(handle, UIBox2.FromDimensions(0, 0, minSize.X + size, PixelHeight));
             }
         }
 
-        protected override Vector2 CalculateMinimumSize()
+        protected override Vector2 MeasureOverride(Vector2 availableSize)
         {
             var bgSize = _getBackground()?.MinimumSize ?? Vector2.Zero;
             var fgSize = _getForeground()?.MinimumSize ?? Vector2.Zero;

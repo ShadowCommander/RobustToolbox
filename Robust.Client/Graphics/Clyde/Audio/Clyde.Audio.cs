@@ -8,7 +8,7 @@ using System.Threading;
 using OpenToolkit.Audio.OpenAL;
 using OpenToolkit.Audio.OpenAL.Extensions.Creative.EFX;
 using Robust.Client.Audio;
-using Robust.Client.Interfaces.Graphics;
+using Robust.Shared;
 using Robust.Shared.Log;
 using Vector2 = Robust.Shared.Maths.Vector2;
 
@@ -19,22 +19,25 @@ namespace Robust.Client.Graphics.Clyde
         private ALDevice _openALDevice;
         private ALContext _openALContext;
 
-        private readonly List<LoadedAudioSample> _audioSampleBuffers = new List<LoadedAudioSample>();
+        private readonly List<LoadedAudioSample> _audioSampleBuffers = new();
 
         private readonly Dictionary<int, WeakReference<AudioSource>> _audioSources =
-            new Dictionary<int, WeakReference<AudioSource>>();
+            new();
 
         private readonly Dictionary<int, WeakReference<BufferedAudioSource>> _bufferedAudioSources =
-            new Dictionary<int, WeakReference<BufferedAudioSource>>();
+            new();
 
-        private readonly HashSet<string> _alcDeviceExtensions = new HashSet<string>();
-        private readonly HashSet<string> _alContextExtensions = new HashSet<string>();
+        private readonly HashSet<string> _alcDeviceExtensions = new();
+        private readonly HashSet<string> _alContextExtensions = new();
 
         // Used to track audio sources that were disposed in the finalizer thread,
         // so we need to properly send them off in the main thread.
-        private readonly ConcurrentQueue<(int sourceHandle, int filterHandle)> _sourceDisposeQueue = new ConcurrentQueue<(int, int)>();
-        private readonly ConcurrentQueue<(int sourceHandle, int filterHandle)> _bufferedSourceDisposeQueue = new ConcurrentQueue<(int, int)>();
-        private readonly ConcurrentQueue<int> _bufferDisposeQueue = new ConcurrentQueue<int>();
+        private readonly ConcurrentQueue<(int sourceHandle, int filterHandle)> _sourceDisposeQueue = new();
+        private readonly ConcurrentQueue<(int sourceHandle, int filterHandle)> _bufferedSourceDisposeQueue = new();
+        private readonly ConcurrentQueue<int> _bufferDisposeQueue = new();
+
+        // The base gain value for a listener, used to boost the default volume.
+        private const float _baseGain = 2f;
 
         public bool HasAlDeviceExtension(string extension) => _alcDeviceExtensions.Contains(extension);
         public bool HasAlContextExtension(string extension) => _alContextExtensions.Contains(extension);
@@ -49,6 +52,8 @@ namespace Robust.Client.Graphics.Clyde
             _audioCreateContext();
 
             IsEfxSupported = HasAlDeviceExtension("ALC_EXT_EFX");
+
+            _cfg.OnValueChanged(CVars.AudioMasterVolume, SetMasterVolume, true);
         }
 
         private void _audioCreateContext()
@@ -76,8 +81,7 @@ namespace Robust.Client.Graphics.Clyde
 
         private void _audioOpenDevice()
         {
-
-            var preferredDevice = _configurationManager.GetCVar<string>("audio.device");
+            var preferredDevice = _cfg.GetCVar(CVars.AudioDevice);
 
             // Open device.
             if (!string.IsNullOrEmpty(preferredDevice))
@@ -177,6 +181,11 @@ namespace Robust.Client.Graphics.Clyde
         private static void RemoveEfx((int sourceHandle, int filterHandle) handles)
         {
             if (handles.filterHandle != 0) EFX.DeleteFilter(handles.filterHandle);
+        }
+
+        public void SetMasterVolume(float newVolume)
+        {
+            AL.Listener(ALListenerf.Gain, _baseGain * newVolume);
         }
 
         public IClydeAudioSource CreateAudioSource(AudioStream stream)
@@ -473,7 +482,7 @@ namespace Robust.Client.Graphics.Clyde
 
                 var (x, y) = position;
 
-                if (!ValidatePosition(x, y))
+                if (!AreFinite(x, y))
                 {
                     return false;
                 }
@@ -494,7 +503,7 @@ namespace Robust.Client.Graphics.Clyde
                 return true;
             }
 
-            private static bool ValidatePosition(float x, float y)
+            private static bool AreFinite(float x, float y)
             {
                 if (float.IsFinite(x) && float.IsFinite(y))
                 {
@@ -502,6 +511,22 @@ namespace Robust.Client.Graphics.Clyde
                 }
 
                 return false;
+            }
+
+            public void SetVelocity(Vector2 velocity)
+            {
+                _checkDisposed();
+
+                var (x, y) = velocity;
+
+                if (!AreFinite(x, y))
+                {
+                    return;
+                }
+
+                AL.Source(SourceHandle, ALSource3f.Velocity, x, y, 0);
+
+                _checkAlError();
             }
 
             public void SetPitch(float pitch)
@@ -553,7 +578,7 @@ namespace Robust.Client.Graphics.Clyde
         {
             private int? SourceHandle = null;
             private int[] BufferHandles;
-            private Dictionary<int, int> BufferMap = new Dictionary<int, int>();
+            private Dictionary<int, int> BufferMap = new();
             private readonly Clyde _master;
             private bool _mono = true;
             private bool _float = false;
@@ -658,7 +683,6 @@ namespace Robust.Client.Graphics.Clyde
                 _checkAlError();
             }
 
-
             private void SetOcclusionEfx(float gain, float cutoff)
             {
                 if (FilterHandle == 0)
@@ -685,7 +709,7 @@ namespace Robust.Client.Graphics.Clyde
 
                 var (x, y) = position;
 
-                if (!ValidatePosition(x, y))
+                if (!AreFinite(x, y))
                 {
                     return false;
                 }
@@ -697,7 +721,7 @@ namespace Robust.Client.Graphics.Clyde
                 return true;
             }
 
-            private static bool ValidatePosition(float x, float y)
+            private static bool AreFinite(float x, float y)
             {
                 if (float.IsFinite(x) && float.IsFinite(y))
                 {
@@ -705,6 +729,22 @@ namespace Robust.Client.Graphics.Clyde
                 }
 
                 return false;
+            }
+
+            public void SetVelocity(Vector2 velocity)
+            {
+                _checkDisposed();
+
+                var (x, y) = velocity;
+
+                if (!AreFinite(x, y))
+                {
+                    return;
+                }
+
+                AL.Source(SourceHandle!.Value, ALSource3f.Velocity, x, y, 0);
+
+                _checkAlError();
             }
 
             public void SetPitch(float pitch)
@@ -730,7 +770,7 @@ namespace Robust.Client.Graphics.Clyde
             {
                 if (SourceHandle == null) return;
 
-                if (!disposing || Thread.CurrentThread != _master._mainThread)
+                if (!disposing || Thread.CurrentThread != _master._gameThread)
                 {
                     // We can't run this code inside another thread so tell Clyde to clear it up later.
                     _master.DeleteBufferedSourceOnMainThread(SourceHandle.Value, FilterHandle);

@@ -5,14 +5,12 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using Robust.Shared.Log;
-using Robust.Shared.Utility;
-
 
 namespace Robust.Shared.Exceptions
 {
     internal sealed class RuntimeLog : IRuntimeLog
     {
-        private readonly Dictionary<Type, List<LoggedException>> exceptions = new Dictionary<Type, List<LoggedException>>();
+        private readonly Dictionary<Type, List<LoggedException>> exceptions = new();
 
         public int ExceptionCount => exceptions.Values.Sum(l => l.Count);
 

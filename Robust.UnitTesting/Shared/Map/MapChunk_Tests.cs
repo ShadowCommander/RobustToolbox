@@ -1,10 +1,9 @@
-﻿using System;
-using System.Collections;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Moq;
 using NUnit.Framework;
-using Robust.Shared.GameObjects.Components.Transform;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Timing;
@@ -29,7 +28,7 @@ namespace Robust.UnitTesting.Shared.Map
 
             Assert.That(chunk.X, Is.EqualTo(7));
             Assert.That(chunk.Y, Is.EqualTo(9));
-            Assert.That(chunk.Indices, Is.EqualTo(new MapIndices(7,9)));
+            Assert.That(chunk.Indices, Is.EqualTo(new Vector2i(7,9)));
         }
 
         [Test]
@@ -107,7 +106,7 @@ namespace Robust.UnitTesting.Shared.Map
             var chunk = MapChunkFactory(7, 9);
             chunk.SetTile(3, 5, new Tile(1, 3));
 
-            var result = chunk.GetTileRef(new MapIndices(3, 5));
+            var result = chunk.GetTileRef(new Vector2i(3, 5));
 
             Assert.That(result.X, Is.EqualTo(8 * 7 + 3));
             Assert.That(result.Y, Is.EqualTo(8 * 9 + 5));
@@ -124,8 +123,8 @@ namespace Robust.UnitTesting.Shared.Map
 
             Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(8, 0)));
             Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(0, 8)));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(new MapIndices(8,0))));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(new MapIndices(0, 8))));
+            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(new Vector2i(8,0))));
+            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetTileRef(new Vector2i(0, 8))));
         }
 
         [Test]
@@ -164,13 +163,13 @@ namespace Robust.UnitTesting.Shared.Map
             Assert.That(tiles[0],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 3, 8 * 9 + 5),
+                    new Vector2i(8 * 7 + 3, 8 * 9 + 5),
                     new Tile(1, 3))));
 
             Assert.That(tiles[1],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 5, 8 * 9 + 4),
+                    new Vector2i(8 * 7 + 5, 8 * 9 + 4),
                     new Tile(5, 7))));
         }
 
@@ -189,13 +188,13 @@ namespace Robust.UnitTesting.Shared.Map
             Assert.That(tiles[8*3+5],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 3, 8 * 9 + 5),
+                    new Vector2i(8 * 7 + 3, 8 * 9 + 5),
                     new Tile(1, 3))));
 
             Assert.That(tiles[8*5+4],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 5, 8 * 9 + 4),
+                    new Vector2i(8 * 7 + 5, 8 * 9 + 4),
                     new Tile(5, 7))));
         }
 
@@ -249,13 +248,13 @@ namespace Robust.UnitTesting.Shared.Map
             Assert.That(tiles[0],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 3, 8 * 9 + 5),
+                    new Vector2i(8 * 7 + 3, 8 * 9 + 5),
                     new Tile(1, 3))));
 
             Assert.That(tiles[1],
                 Is.EqualTo(new TileRef(new MapId(11),
                     new GridId(13),
-                    new MapIndices(8 * 7 + 5, 8 * 9 + 4),
+                    new Vector2i(8 * 7 + 5, 8 * 9 + 4),
                     new Tile(5, 7))));
         }
 
@@ -267,12 +266,12 @@ namespace Robust.UnitTesting.Shared.Map
             // 8x8 chunk (-1,-1) occupies tiles -8 to -1 on each axis
             var chunk = MapChunkFactory(-1, -1);
 
-            var indices = chunk.GridTileToChunkTile(new MapIndices(-3, -5));
+            var indices = chunk.GridTileToChunkTile(new Vector2i(-3, -5));
 
             // drawing this out helps a ton
             // grid tile -1,-1 is chunk tile 7,7
             // grid tile -8,-8 is chunk tile 0,0
-            Assert.That(indices, Is.EqualTo(new MapIndices(5, 3)));
+            Assert.That(indices, Is.EqualTo(new Vector2i(5, 3)));
         }
 
         [Test]
@@ -282,113 +281,7 @@ namespace Robust.UnitTesting.Shared.Map
 
             var result = chunk.ToString();
 
-            Assert.That(result, Is.EqualTo("Chunk {7,9}"));
-        }
-
-        [Test]
-        public void GetEmptySnapGrid()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            Assert.That(chunk.GetSnapGridCell(0,0, SnapGridOffset.Center).ToList().Count, Is.EqualTo(0));
-            Assert.That(chunk.GetSnapGridCell(0, 0, SnapGridOffset.Edge).ToList().Count, Is.EqualTo(0));
-        }
-
-        [Test]
-        public void GetSnapGridThrowsOutOfRange()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetSnapGridCell(8,0, SnapGridOffset.Center).ToList()));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetSnapGridCell(0, 8, SnapGridOffset.Center).ToList()));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetSnapGridCell(8,0,SnapGridOffset.Edge).ToList()));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.GetSnapGridCell(0, 8, SnapGridOffset.Edge).ToList()));
-        }
-
-        [Test]
-        public void AddSnapGridCellCenter()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            var snapGridComponent = new SnapGridComponent();
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Center, snapGridComponent);
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Edge, new SnapGridComponent());
-            chunk.AddToSnapGridCell(3, 6, SnapGridOffset.Center, new SnapGridComponent());
-
-            var result = chunk.GetSnapGridCell(3, 5, SnapGridOffset.Center).ToList();
-
-            Assert.That(result.Count, Is.EqualTo(1));
-            Assert.That(result[0], Is.EqualTo(snapGridComponent));
-        }
-
-        [Test]
-        public void AddSnapGridCellEdge()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            var snapGridComponent = new SnapGridComponent();
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Edge, snapGridComponent);
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Center, new SnapGridComponent());
-            chunk.AddToSnapGridCell(3, 6, SnapGridOffset.Edge, new SnapGridComponent());
-
-            var result = chunk.GetSnapGridCell(3, 5, SnapGridOffset.Edge).ToList();
-
-            Assert.That(result.Count, Is.EqualTo(1));
-            Assert.That(result[0], Is.EqualTo(snapGridComponent));
-        }
-
-        [Test]
-        public void AddSnapGridThrowsOutOfRange()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.AddToSnapGridCell(8, 0, SnapGridOffset.Center, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.AddToSnapGridCell(0, 8, SnapGridOffset.Center, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.AddToSnapGridCell(8, 0, SnapGridOffset.Edge, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.AddToSnapGridCell(0, 8, SnapGridOffset.Edge, new SnapGridComponent())));
-        }
-
-        [Test]
-        public void RemoveSnapGridCellCenter()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            var snapGridComponent = new SnapGridComponent();
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Center, snapGridComponent);
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Edge, new SnapGridComponent());
-            chunk.AddToSnapGridCell(3, 6, SnapGridOffset.Center, new SnapGridComponent());
-
-            chunk.RemoveFromSnapGridCell(3, 5, SnapGridOffset.Center, snapGridComponent);
-
-            var result = chunk.GetSnapGridCell(3, 5, SnapGridOffset.Center).ToList();
-            Assert.That(result.Count, Is.EqualTo(0));
-        }
-
-        [Test]
-        public void RemoveSnapGridCellEdge()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            var snapGridComponent = new SnapGridComponent();
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Edge, snapGridComponent);
-            chunk.AddToSnapGridCell(3, 5, SnapGridOffset.Center, new SnapGridComponent());
-            chunk.AddToSnapGridCell(3, 6, SnapGridOffset.Edge, new SnapGridComponent());
-
-            chunk.RemoveFromSnapGridCell(3, 5, SnapGridOffset.Edge, snapGridComponent);
-
-            var result = chunk.GetSnapGridCell(3, 5, SnapGridOffset.Edge).ToList();
-            Assert.That(result.Count, Is.EqualTo(0));
-        }
-
-        [Test]
-        public void RemoveSnapGridThrowsOutOfRange()
-        {
-            var chunk = MapChunkFactory(7, 9);
-
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.RemoveFromSnapGridCell(8, 0, SnapGridOffset.Center, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.RemoveFromSnapGridCell(0, 8, SnapGridOffset.Center, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.RemoveFromSnapGridCell(8, 0, SnapGridOffset.Edge, new SnapGridComponent())));
-            Assert.Throws<ArgumentOutOfRangeException>((() => chunk.RemoveFromSnapGridCell(0, 8, SnapGridOffset.Edge, new SnapGridComponent())));
+            Assert.That(result, Is.EqualTo("Chunk (7, 9)"));
         }
 
         [Test]
@@ -449,7 +342,7 @@ namespace Robust.UnitTesting.Shared.Map
             var chunk = MapChunkFactory(7, 9);
             chunk.SetTile(3, 5, new Tile(1));
 
-            var result = chunk.CollidesWithChunk(new MapIndices(3, 5));
+            var result = chunk.CollidesWithChunk(new Vector2i(3, 5));
 
             Assert.That(result, Is.True);
         }
@@ -460,7 +353,7 @@ namespace Robust.UnitTesting.Shared.Map
             var chunk = MapChunkFactory(7, 9);
             chunk.SetTile(3, 5, new Tile(1));
 
-            var result = chunk.CollidesWithChunk(new MapIndices(3, 6));
+            var result = chunk.CollidesWithChunk(new Vector2i(3, 6));
 
             Assert.That(result, Is.False);
         }

@@ -1,12 +1,12 @@
-﻿using System;
+using System;
 using Robust.Shared.Serialization;
 
 namespace Robust.Shared.Map
 {
     [Serializable, NetSerializable]
-    public struct MapId : IEquatable<MapId>
+    public readonly struct MapId : IEquatable<MapId>
     {
-        public static readonly MapId Nullspace = new MapId(0);
+        public static readonly MapId Nullspace = new(0);
 
         internal readonly int Value;
 

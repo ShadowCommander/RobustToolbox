@@ -1,15 +1,15 @@
-﻿using System.IO;
+using System.IO;
+using Moq;
 using NUnit.Framework;
-using Robust.Client.Interfaces.GameObjects;
+using Robust.Client.GameObjects;
+using Robust.Client.Physics;
 using Robust.Shared.GameObjects;
-using Robust.Shared.GameObjects.Components.Transform;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.GameObjects.Components;
-using Robust.Shared.Interfaces.Map;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Physics.Broadphase;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Serialization.Manager;
 
 namespace Robust.UnitTesting.Client.GameObjects.Components
 {
@@ -35,16 +35,28 @@ namespace Robust.UnitTesting.Client.GameObjects.Components
         private MapId MapB;
         private IMapGrid GridB = default!;
 
+        protected override void OverrideIoC()
+        {
+            base.OverrideIoC();
+
+            var mock = new Mock<IEntitySystemManager>();
+            var system = new SharedTransformSystem();
+            var broady = new BroadPhaseSystem();
+            var physics = new PhysicsSystem();
+            mock.Setup(m => m.GetEntitySystem<SharedTransformSystem>()).Returns(system);
+            mock.Setup(m => m.GetEntitySystem<SharedBroadPhaseSystem>()).Returns(broady);
+            mock.Setup(m => m.GetEntitySystem<SharedPhysicsSystem>()).Returns(physics);
+
+            IoCManager.RegisterInstance<IEntitySystemManager>(mock.Object, true);
+        }
+
         [OneTimeSetUp]
         public void Setup()
         {
-            var compMan = IoCManager.Resolve<IComponentManager>();
-            compMan.Initialize();
             EntityManager = IoCManager.Resolve<IClientEntityManager>();
             MapManager = IoCManager.Resolve<IMapManager>();
-            MapManager.Initialize();
-            MapManager.Startup();
 
+            IoCManager.Resolve<ISerializationManager>().Initialize();
             var manager = IoCManager.Resolve<IPrototypeManager>();
             manager.LoadFromStream(new StringReader(PROTOTYPES));
             manager.Resync();
@@ -66,22 +78,22 @@ namespace Robust.UnitTesting.Client.GameObjects.Components
         public void ComponentStatePositionTest()
         {
             // Arrange
-            var initialPos = new GridCoordinates(0,0,new GridId(1));
+            var initialPos = new EntityCoordinates(GridA.GridEntityId, (0, 0));
             var parent = EntityManager.SpawnEntity("dummy", initialPos);
             var child = EntityManager.SpawnEntity("dummy", initialPos);
             var parentTrans = parent.Transform;
             var childTrans = child.Transform;
 
-            var compState = new TransformComponent.TransformComponentState(new Vector2(5, 5), new Angle(0), GridB.GridEntityId);
+            var compState = new TransformComponent.TransformComponentState(new Vector2(5, 5), new Angle(0), GridB.GridEntityId, false);
             parentTrans.HandleComponentState(compState, null);
 
-            compState = new TransformComponent.TransformComponentState(new Vector2(6, 6), new Angle(0), GridB.GridEntityId);
+            compState = new TransformComponent.TransformComponentState(new Vector2(6, 6), new Angle(0), GridB.GridEntityId, false);
             childTrans.HandleComponentState(compState, null);
             // World pos should be 6, 6 now.
 
             // Act
             var oldWpos = childTrans.WorldPosition;
-            compState = new TransformComponent.TransformComponentState(new Vector2(1, 1), new Angle(0), parent.Uid);
+            compState = new TransformComponent.TransformComponentState(new Vector2(1, 1), new Angle(0), parent.Uid, false);
             childTrans.HandleComponentState(compState, null);
             var newWpos = childTrans.WorldPosition;
 
@@ -96,7 +108,7 @@ namespace Robust.UnitTesting.Client.GameObjects.Components
         public void WorldRotationTest()
         {
             // Arrange
-            var initalPos = new GridCoordinates(0,0,new GridId(1));
+            var initalPos = new EntityCoordinates(GridA.GridEntityId, (0, 0));
             var node1 = EntityManager.SpawnEntity("dummy", initalPos);
             var node2 = EntityManager.SpawnEntity("dummy", initalPos);
             var node3 = EntityManager.SpawnEntity("dummy", initalPos);
@@ -109,11 +121,11 @@ namespace Robust.UnitTesting.Client.GameObjects.Components
             var node2Trans = node2.Transform;
             var node3Trans = node3.Transform;
 
-            var compState = new TransformComponent.TransformComponentState(new Vector2(6, 6), Angle.FromDegrees(135), GridB.GridEntityId);
+            var compState = new TransformComponent.TransformComponentState(new Vector2(6, 6), Angle.FromDegrees(135), GridB.GridEntityId, false);
             node1Trans.HandleComponentState(compState, null);
-            compState = new TransformComponent.TransformComponentState(new Vector2(1, 1), Angle.FromDegrees(45), node1.Uid);
+            compState = new TransformComponent.TransformComponentState(new Vector2(1, 1), Angle.FromDegrees(45), node1.Uid, false);
             node2Trans.HandleComponentState(compState, null);
-            compState = new TransformComponent.TransformComponentState(new Vector2(0, 0), Angle.FromDegrees(45), node2.Uid);
+            compState = new TransformComponent.TransformComponentState(new Vector2(0, 0), Angle.FromDegrees(45), node2.Uid, false);
             node3Trans.HandleComponentState(compState, null);
 
             // Act

@@ -3,13 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using Moq;
 using NUnit.Framework;
+using Robust.Shared.ContentPack;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Interfaces.GameObjects;
-using Robust.Shared.Interfaces.GameObjects.Systems;
-using Robust.Shared.Interfaces.Log;
-using Robust.Shared.Interfaces.Reflection;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
+using Robust.Shared.Reflection;
 
 namespace Robust.UnitTesting.Shared.GameObjects
 {
@@ -68,6 +66,8 @@ namespace Robust.UnitTesting.Shared.GameObjects
             var deps = new DependencyCollection();
             deps.Register<ILogManager, LogManager>();
             deps.Register<IDynamicTypeFactory, DynamicTypeFactory>();
+            deps.Register<IDynamicTypeFactoryInternal, DynamicTypeFactory>();
+            deps.RegisterInstance<IModLoader>(new Mock<IModLoader>().Object);
             deps.Register<IEntitySystemManager, EntitySystemManager>();
             deps.RegisterInstance<IEntityManager>(new Mock<IEntityManager>().Object);
 
@@ -97,7 +97,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             systems.GetEntitySystem<TestSystemC>().Counter = counter;
             systems.GetEntitySystem<TestSystemD>().Counter = counter;
 
-            systems.Update(1);
+            systems.TickUpdate(1);
 
             Assert.That(counter.X, Is.EqualTo(4));
 

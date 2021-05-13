@@ -1,7 +1,6 @@
 using System;
 using JetBrains.Annotations;
 using Lidgren.Network;
-using Robust.Shared.Interfaces.Network;
 using Robust.Shared.Serialization;
 
 namespace Robust.Shared.Network.Messages
@@ -22,8 +21,6 @@ namespace Robust.Shared.Network.Messages
         {
         }
 
-        public int PackageSize { get; set; }
-
         /// <value>
         /// The raw bytes of the string mapping held by the server.
         /// </value>
@@ -31,8 +28,8 @@ namespace Robust.Shared.Network.Messages
 
         public override void ReadFromBuffer(NetIncomingMessage buffer)
         {
-            PackageSize = buffer.ReadVariableInt32();
-            buffer.ReadBytes(Package = new byte[PackageSize]);
+            var size = buffer.ReadVariableInt32();
+            buffer.ReadBytes(Package = new byte[size]);
         }
 
         public override void WriteToBuffer(NetOutgoingMessage buffer)

@@ -1,13 +1,11 @@
 ﻿using System;
 using Robust.Client.Graphics;
-using Robust.Client.Graphics.Drawing;
-using Robust.Client.Interfaces.ResourceManagement;
-using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.ViewVariables.Editors;
 using Robust.Shared.Input;
 using Robust.Shared.Maths;
+using Robust.Shared.Serialization;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
@@ -23,23 +21,23 @@ namespace Robust.Client.ViewVariables
         private readonly Label _bottomLabel;
 
         private readonly IViewVariablesManagerInternal _viewVariablesManager;
-        private readonly IResourceCache _resourceCache;
+        private readonly IRobustSerializer _robustSerializer;
 
-        public ViewVariablesPropertyControl(IViewVariablesManagerInternal viewVars, IResourceCache resourceCache)
+        public ViewVariablesPropertyControl(IViewVariablesManagerInternal viewVars, IRobustSerializer robustSerializer)
         {
             MouseFilter = MouseFilterMode.Pass;
 
             _viewVariablesManager = viewVars;
-            _resourceCache = resourceCache;
+            _robustSerializer = robustSerializer;
 
             MouseFilter = MouseFilterMode.Pass;
             ToolTip = "Click to expand";
-            CustomMinimumSize = new Vector2(0, 25);
+            MinHeight = 25;
 
             VBox = new VBoxContainer {SeparationOverride = 0};
             AddChild(VBox);
 
-            TopContainer = new HBoxContainer {SizeFlagsVertical = SizeFlags.FillExpand};
+            TopContainer = new HBoxContainer {VerticalExpand = true};
             VBox.AddChild(TopContainer);
 
             BottomContainer = new HBoxContainer
@@ -61,27 +59,27 @@ namespace Robust.Client.ViewVariables
             TopContainer.AddChild(NameLabel);
         }
 
-        public ViewVariablesPropertyEditor SetProperty(ViewVariablesBlobMembers.MemberData member)
+        public VVPropEditor SetProperty(ViewVariablesBlobMembers.MemberData member)
         {
             NameLabel.Text = member.Name;
             var type = Type.GetType(member.Type);
 
             _bottomLabel.Text = $"Type: {member.TypePretty}";
-            ViewVariablesPropertyEditor editor;
-            if (type == null)
+            VVPropEditor editor;
+            if (type == null || !_robustSerializer.CanSerialize(type))
             {
                 // Type is server-side only.
                 // Info whether it's reference or value type can be figured out from the sent value.
-                if (member.Value is ViewVariablesBlobMembers.ServerValueTypeToken)
+                if (type?.IsValueType == true || member.Value is ViewVariablesBlobMembers.ServerValueTypeToken)
                 {
                     // Value type, just display it stringified read-only.
-                    editor = new ViewVariablesPropertyEditorDummy();
+                    editor = new VVPropEditorDummy();
                 }
                 else
                 {
                     // Has to be a reference type at this point.
-                    DebugTools.Assert(member.Value is ViewVariablesBlobMembers.ReferenceToken || member.Value == null);
-                    editor = _viewVariablesManager.PropertyFor(typeof(object));
+                    DebugTools.Assert(member.Value is ViewVariablesBlobMembers.ReferenceToken || member.Value == null || type?.IsClass == true || type?.IsInterface == true);
+                    editor = _viewVariablesManager.PropertyFor(type ?? typeof(object));
                 }
             }
             else
@@ -90,12 +88,12 @@ namespace Robust.Client.ViewVariables
             }
 
             var view = editor.Initialize(member.Value, !member.Editable);
-            if (view.SizeFlagsHorizontal != SizeFlags.FillExpand)
+            if (!view.HorizontalExpand)
             {
-                NameLabel.SizeFlagsHorizontal = SizeFlags.FillExpand;
+                NameLabel.HorizontalExpand = true;
             }
 
-            NameLabel.CustomMinimumSize = new Vector2(150, 0);
+            NameLabel.MinSize = new Vector2(150, 0);
             TopContainer.AddChild(view);
             /*
             _beingEdited = obj;
@@ -115,9 +113,9 @@ namespace Robust.Client.ViewVariables
             var view = editor.Initialize(value, attr.Access != VVAccess.ReadWrite);
             if (view.SizeFlagsHorizontal != SizeFlags.FillExpand)
             {
-                NameLabel.SizeFlagsHorizontal = SizeFlags.FillExpand;
+                NameLabel.HorizontalExpand = true;
             }
-            NameLabel.CustomMinimumSize = new Vector2(150, 0);
+            NameLabel.MinSize = new Vector2(150, 0);
             TopContainer.AddChild(view);
             editor.OnValueChanged += v => { propertyInfo.SetValue(obj, v); };
             */
