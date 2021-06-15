@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -15,6 +16,8 @@ namespace Robust.Shared.Containers
         /// <inheritdoc />
         [ViewVariables]
         public abstract IReadOnlyList<IEntity> ContainedEntities { get; }
+
+        public int Count => ContainedEntities.Count;
 
         /// <inheritdoc />
         public abstract string ContainerType { get; }

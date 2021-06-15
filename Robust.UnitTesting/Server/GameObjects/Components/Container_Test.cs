@@ -208,7 +208,7 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             var result = container.Insert(insertEntity);
 
             Assert.That(result, Is.True);
-            Assert.That(container.ContainedEntities.Count, Is.EqualTo(1));
+            Assert.That(container.Count, Is.EqualTo(1));
 
             Assert.That(containerEntity.Transform.ChildCount, Is.EqualTo(1));
             Assert.That(containerEntity.Transform.ChildEntityUids.First(), Is.EqualTo(insertEntity.Uid));
@@ -247,8 +247,8 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             var result = container2.Insert(transferEntity);
 
             Assert.That(result, Is.True);
-            Assert.That(container1.ContainedEntities.Count, Is.EqualTo(0));
-            Assert.That(container2.ContainedEntities.Count, Is.EqualTo(1));
+            Assert.That(container1.Count, Is.EqualTo(0));
+            Assert.That(container2.Count, Is.EqualTo(1));
         }
 
         [Test]

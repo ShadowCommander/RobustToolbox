@@ -147,9 +147,9 @@ namespace Robust.Shared.Containers
 
             foreach (var container in _containers.Values)
             {
-                var uidArr = new EntityUid[container.ContainedEntities.Count];
+                var uidArr = new EntityUid[container.Count];
 
-                for (var index = 0; index < container.ContainedEntities.Count; index++)
+                for (var index = 0; index < container.Count; index++)
                 {
                     var iEntity = container.ContainedEntities[index];
                     uidArr[index] = iEntity.Uid;
