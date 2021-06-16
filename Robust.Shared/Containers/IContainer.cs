@@ -35,6 +35,11 @@ namespace Robust.Shared.Containers
         IReadOnlyList<IEntity> ContainedEntities { get; }
 
         /// <summary>
+        /// Count of all the entities contained within this specific container
+        /// </summary>
+        int Count { get; }
+
+        /// <summary>
         /// The type of this container.
         /// </summary>
         string ContainerType { get; }
