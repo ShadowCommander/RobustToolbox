@@ -134,18 +134,6 @@ namespace Robust.Shared.Containers
             return Contains(toremove);
         }
 
-        public void RemoveAll()
-        {
-            foreach (var entity in ContainedEntities.ToList())
-                Remove(entity);
-        }
-
-        public void ForceRemoveAll()
-        {
-            foreach (var entity in ContainedEntities.ToList())
-                ForceRemove(entity);
-        }
-
         /// <inheritdoc />
         public abstract bool Contains(IEntity contained);
 
