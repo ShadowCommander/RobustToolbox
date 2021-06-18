@@ -127,7 +127,7 @@ namespace Robust.Shared.Containers
                 if (moveTo.HasValue)
                     entity.Transform.Coordinates = moveTo.Value;
 
-                if(attachToGridOrMap)
+                if (attachToGridOrMap)
                     entity.Transform.AttachToGridOrMap();
             }
         }
