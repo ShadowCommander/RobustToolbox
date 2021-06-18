@@ -141,7 +141,7 @@ namespace Robust.Shared.Containers
             {
                 if (ent.Deleted) continue;
                 container.ForceRemove(ent);
-                ent.Delete();
+                ent.QueueDelete();
             }
         }
 
