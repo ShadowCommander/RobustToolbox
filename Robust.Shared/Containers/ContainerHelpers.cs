@@ -145,6 +145,19 @@ namespace Robust.Shared.Containers
             }
         }
 
+        public static void TransferTo(this IContainer from, IContainer to)
+        {
+            foreach (var ent in from.ContainedEntities.ToArray())
+            {
+                if (ent.Deleted
+                    || !from.CanRemove(ent))
+                    continue;
+
+                from.ForceRemove(ent);
+                to.Insert(ent);
+            }
+        }
+
         public static void AttachParentToContainerOrGrid(this ITransformComponent transform)
         {
             if (transform.Parent == null
