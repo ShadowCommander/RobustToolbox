@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Moq;
 using NUnit.Framework;
@@ -6,6 +7,7 @@ using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Players;
+using Robust.Shared.Utility;
 
 namespace Robust.UnitTesting.Server.GameObjects.Components
 {
@@ -322,6 +324,42 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             public override bool CanInsert(IEntity toinsert)
             {
                 return toinsert.TryGetComponent(out IContainerManager _);
+            }
+
+            public override IEntity First()
+            {
+                DebugTools.Assert(_containerList.Count != 0, "Container is empty. Check container.Count before using this.");
+                return _containerList[0];
+            }
+
+            public override IEntity Last()
+            {
+                DebugTools.Assert(_containerList.Count != 0, "Container is empty. Check container.Count before using this.");
+                return _containerList[^1];
+            }
+
+            public override bool TryGetFirst([NotNullWhen(true)] out IEntity? entity)
+            {
+                if (_containerList.Count == 0)
+                {
+                    entity = null;
+                    return false;
+                }
+
+                entity = _containerList[0];
+                return true;
+            }
+
+            public override bool TryGetLast([NotNullWhen(true)] out IEntity? entity)
+            {
+                if (_containerList.Count == 0)
+                {
+                    entity = null;
+                    return false;
+                }
+
+                entity = _containerList[^1];
+                return true;
             }
         }
     }

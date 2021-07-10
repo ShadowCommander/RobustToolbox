@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using JetBrains.Annotations;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager.Attributes;
+using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.Containers
@@ -60,6 +62,34 @@ namespace Robust.Shared.Containers
             if (contained == ContainedEntity)
                 return true;
             return false;
+        }
+
+        public override IEntity First()
+        {
+            DebugTools.Assert(_containedEntity != null, "Container is empty. Check container.Count before using this.");
+            return _containedEntity!;
+        }
+
+        public override IEntity Last()
+        {
+            DebugTools.Assert(_containedEntity != null, "Container is empty. Check container.Count before using this.");
+            return _containedEntity!;
+        }
+
+        public override bool TryGetFirst([NotNullWhen(true)] out IEntity? entity)
+        {
+            entity = _containedEntity;
+            if (entity == null)
+                return false;
+            return true;
+        }
+
+        public override bool TryGetLast([NotNullWhen(true)] out IEntity? entity)
+        {
+            entity = _containedEntity;
+            if (entity == null)
+                return false;
+            return true;
         }
 
         /// <inheritdoc />

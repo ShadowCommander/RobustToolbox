@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using JetBrains.Annotations;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -124,6 +125,14 @@ namespace Robust.Shared.Containers
         /// <param name="contained">The entity to check.</param>
         /// <returns>True if the entity is immediately contained in this container, false otherwise.</returns>
         bool Contains(IEntity contained);
+
+        IEntity First();
+
+        IEntity Last();
+
+        bool TryGetFirst([NotNullWhen(true)] out IEntity? entity);
+
+        bool TryGetLast([NotNullWhen(true)] out IEntity? entity);
 
         /// <summary>
         /// Clears the container and marks it as deleted.

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -135,6 +136,18 @@ namespace Robust.Shared.Containers
 
         /// <inheritdoc />
         public abstract bool Contains(IEntity contained);
+
+        /// <inheritdoc />
+        public abstract IEntity First();
+
+        /// <inheritdoc />
+        public abstract IEntity Last();
+
+        /// <inheritdoc />
+        public abstract bool TryGetFirst([NotNullWhen(true)] out IEntity? entity);
+
+        /// <inheritdoc />
+        public abstract bool TryGetLast([NotNullWhen(true)] out IEntity? entity);
 
         /// <inheritdoc />
         public virtual void Shutdown()
