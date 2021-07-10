@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 
 namespace Robust.Shared.Random
@@ -79,6 +80,18 @@ namespace Robust.Shared.Random
             DebugTools.Assert(chance <= 1 && chance >= 0, $"Chance must be in the range 0-1. It was {chance}.");
 
             return random.NextDouble() <= chance;
+        }
+
+        public static Vector2 NextVector2(this IRobustRandom random, float value)
+        {
+            return random.NextVector2(value, value, value, value);
+        }
+
+        public static Vector2 NextVector2(this IRobustRandom random, float minX, float maxX, float minY, float maxY)
+        {
+            var randomX = random.NextFloat() * (maxX - minX) + minX;
+            var randomY = random.NextFloat() * (maxY - minY) + minY;
+            return new Vector2(randomX, randomY);
         }
     }
 }

@@ -3,7 +3,9 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using JetBrains.Annotations;
 using Robust.Shared.GameObjects;
+using Robust.Shared.IoC;
 using Robust.Shared.Map;
+using Robust.Shared.Random;
 using Robust.Shared.Utility;
 
 namespace Robust.Shared.Containers
@@ -113,8 +115,12 @@ namespace Robust.Shared.Containers
         /// <summary>
         /// Attempts to remove all entities in a container.
         /// </summary>
-        public static void EmptyContainer(this IContainer container, bool force = false, EntityCoordinates? moveTo = null, bool attachToGridOrMap = false)
+        public static void EmptyContainer(this IContainer container, bool force = false, EntityCoordinates? moveTo = null, bool attachToGridOrMap = false, float? randomOffset = null)
         {
+            IRobustRandom random = default!;
+            if (randomOffset.HasValue)
+                random = IoCManager.Resolve<IRobustRandom>();
+
             foreach (var entity in container.ContainedEntities.ToArray())
             {
                 if (entity.Deleted) continue;
@@ -124,8 +130,12 @@ namespace Robust.Shared.Containers
                 else
                     container.Remove(entity);
 
-                if (moveTo.HasValue)
-                    entity.Transform.Coordinates = moveTo.Value;
+                var pos = moveTo ?? container.Owner.Transform.Coordinates;
+                if (randomOffset.HasValue)
+                    pos.Offset(random.NextVector2((float)randomOffset));
+
+                if (moveTo.HasValue || randomOffset.HasValue)
+                    entity.Transform.Coordinates = pos;
 
                 if (attachToGridOrMap)
                     entity.Transform.AttachToGridOrMap();
