@@ -118,12 +118,19 @@ namespace Robust.Shared.Containers
                     }
                 }
 
+                var containerSystem = IoCManager.Resolve<IEntitySystemManager>().GetEntitySystem<SharedContainerSystem>();
+
                 // Add new entities.
                 foreach (var uid in entityUids)
                 {
-                    var entity = Owner.EntityManager.GetEntity(uid);
+                    if (!Owner.EntityManager.TryGetEntity(uid, out var entity))
+                    {
+                        containerSystem.AddExpectedEntity(uid, container);
+                        continue;
+                    }
 
-                    if (!container.ContainedEntities.Contains(entity)) container.Insert(entity);
+                    if (!container.ContainedEntities.Contains(entity))
+                        container.Insert(entity);
                 }
             }
         }
@@ -147,13 +154,7 @@ namespace Robust.Shared.Containers
 
             foreach (var container in _containers.Values)
             {
-                var uidArr = new EntityUid[container.Count];
-
-                for (var index = 0; index < container.Count; index++)
-                {
-                    var iEntity = container.ContainedEntities[index];
-                    uidArr[index] = iEntity.Uid;
-                }
+                var uidArr = container.ContainedEntities.Select(e => e.Uid).ToArray();
 
                 var sContainer = new ContainerManagerComponentState.ContainerData(container.ContainerType, container.ID, container.ShowContents, container.OccludesLight, uidArr);
                 containerSet.Add(sContainer);
