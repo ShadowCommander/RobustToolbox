@@ -41,6 +41,7 @@ namespace Robust.UnitTesting.Server.GameObjects
             _componentFactory.RegisterClass<ThrowsInAddComponent>();
             _componentFactory.RegisterClass<ThrowsInInitializeComponent>();
             _componentFactory.RegisterClass<ThrowsInStartupComponent>();
+            _componentFactory.GenerateNetIds();
 
             EntityManager = IoCManager.Resolve<IServerEntityManager>();
             MapManager = IoCManager.Resolve<IMapManager>();
@@ -55,9 +56,10 @@ namespace Robust.UnitTesting.Server.GameObjects
             //NOTE: The grids have not moved, so we can assert worldpos == localpos for the test
         }
 
-        [Test]
-        public void Test([Values("throwInAdd", "throwsInInitialize", "throwsInStartup")]
-            string prototypeName)
+        [TestCase("throwInAdd")]
+        [TestCase("throwsInInitialize")]
+        [TestCase("throwsInStartup")]
+        public void Test(string prototypeName)
         {
             Assert.That(() => EntityManager.SpawnEntity(prototypeName, MapCoordinates.Nullspace),
                 Throws.TypeOf<EntityCreationException>());

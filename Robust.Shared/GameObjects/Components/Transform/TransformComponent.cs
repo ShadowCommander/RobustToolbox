@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Robust.Shared.Animations;
 using Robust.Shared.Containers;
+using Robust.Shared.GameStates;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
@@ -16,6 +17,7 @@ using Robust.Shared.ViewVariables;
 namespace Robust.Shared.GameObjects
 {
     [ComponentReference(typeof(ITransformComponent))]
+    [NetworkedComponent()]
     internal class TransformComponent : Component, ITransformComponent, IComponentDebug
     {
         [DataField("parent")]
@@ -53,9 +55,6 @@ namespace Robust.Shared.GameObjects
 
         /// <inheritdoc />
         public override string Name => "Transform";
-
-        /// <inheritdoc />
-        public sealed override uint? NetID => NetIDs.TRANSFORM;
 
         /// <inheritdoc />
         [ViewVariables]
@@ -111,9 +110,6 @@ namespace Robust.Shared.GameObjects
                     return;
 
                 if (_localRotation.EqualsApprox(value, 0.00001))
-                    return;
-
-                if(Anchored)
                     return;
 
                 var oldRotation = _localRotation;
@@ -899,7 +895,6 @@ namespace Robust.Shared.GameObjects
             /// <param name="parentId">Current parent transform of this entity.</param>
             /// <param name="noLocalRotation"></param>
             public TransformComponentState(Vector2 localPosition, Angle rotation, EntityUid parentId, bool noLocalRotation, bool anchored)
-                : base(NetIDs.TRANSFORM)
             {
                 LocalPosition = localPosition;
                 Rotation = rotation;

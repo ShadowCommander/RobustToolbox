@@ -212,6 +212,32 @@ namespace Robust.Shared
             CVarDef.Create("log.runtimelog", true, CVar.ARCHIVE | CVar.SERVERONLY);
 
         /*
+         * Light
+         */
+
+        /// <summary>
+        /// This is the maximum the viewport is enlarged to check for any intersecting render-trees for lights.
+        /// This should be set to your maximum light radius.
+        /// </summary>
+        /// <remarks>
+        /// If this value is too small it just means there may be pop-in where a light is located on a render-tree
+        /// outside of our viewport.
+        /// </remarks>
+        public static readonly CVarDef<float> MaxLightRadius =
+            CVarDef.Create("light.max_radius", 20.0f, CVar.CLIENTONLY);
+
+        /*
+         * Lookup
+         */
+
+        /// <summary>
+        /// Like MaxLightRadius this is how far we enlarge lookups to find intersecting components.
+        /// This should be set to your maximum entity size.
+        /// </summary>
+        public static readonly CVarDef<float> LookupEnlargementRange =
+            CVarDef.Create("lookup.enlargement_range", 10.0f, CVar.ARCHIVE | CVar.REPLICATED | CVar.CHEAT);
+
+        /*
          * LOKI
          */
 
@@ -435,6 +461,13 @@ namespace Robust.Shared
         /// </remarks>
         public static readonly CVarDef<float> MaxAngVelocity =
             CVarDef.Create("physics.maxangvelocity", 15f);
+
+        /// <summary>
+        /// How frequently grid fixtures are updated. Given grid updates can be expensive they aren't run immediately.
+        /// Set to 0 to run them immediately.
+        /// </summary>
+        public static readonly CVarDef<float> GridFixtureUpdateRate =
+            CVarDef.Create("physics.grid_fixture_update_rate", 0.2f);
 
         /*
          * DISCORD

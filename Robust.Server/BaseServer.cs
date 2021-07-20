@@ -102,6 +102,8 @@ namespace Robust.Server
 
         private readonly ManualResetEventSlim _shutdownEvent = new(false);
 
+        public ServerOptions Options { get; private set; } = new();
+
         /// <inheritdoc />
         public int MaxPlayers => _config.GetCVar(CVars.GameMaxPlayers);
 
@@ -114,7 +116,7 @@ namespace Robust.Server
             Logger.InfoS("srv", "Restarting Server...");
 
             Cleanup();
-            Start(_logHandlerFactory);
+            Start(Options, _logHandlerFactory);
         }
 
         /// <inheritdoc />
@@ -141,15 +143,16 @@ namespace Robust.Server
         }
 
         /// <inheritdoc />
-        public bool Start(Func<ILogHandler>? logHandlerFactory = null)
+        public bool Start(ServerOptions options, Func<ILogHandler>? logHandlerFactory = null)
         {
+            Options = options;
             var profilePath = Path.Join(Environment.CurrentDirectory, "AAAAAAAA");
             ProfileOptimization.SetProfileRoot(profilePath);
             ProfileOptimization.StartProfile("AAAAAAAAAA");
 
             _config.Initialize(true);
 
-            if (LoadConfigAndUserData)
+            if (Options.LoadConfigAndUserData)
             {
                 // Sets up the configMgr
                 // If a config file path was passed, use it literally.
@@ -269,22 +272,26 @@ namespace Robust.Server
                 return true;
             }
 
-            var dataDir = LoadConfigAndUserData
+            var dataDir = Options.LoadConfigAndUserData
                 ? _commandLineArgs?.DataDir ?? PathHelpers.ExecutableRelativeFile("data")
                 : null;
 
             // Set up the VFS
             _resources.Initialize(dataDir);
 
-            ProgramShared.DoMounts(_resources, _commandLineArgs?.MountOptions, "Content.Server", contentStart:ContentStart);
+            var mountOptions = _commandLineArgs != null
+                ? MountOptions.Merge(_commandLineArgs.MountOptions, Options.MountOptions) : Options.MountOptions;
+
+            ProgramShared.DoMounts(_resources, mountOptions, Options.ContentBuildDirectory, Options.AssemblyDirectory,
+                Options.LoadContentResources, Options.ResourceMountDisabled, ContentStart);
 
             // When the game is ran with the startup executable being content,
             // we have to disable the separate load context.
             // Otherwise the content assemblies will be loaded twice which causes *many* fun bugs.
             _modLoader.SetUseLoadContext(!ContentStart);
-            _modLoader.SetEnableSandboxing(false);
+            _modLoader.SetEnableSandboxing(Options.Sandboxing);
 
-            if (!_modLoader.TryLoadModulesFrom(new ResourcePath("/Assemblies/"), "Content."))
+            if (!_modLoader.TryLoadModulesFrom(Options.AssemblyDirectory, Options.ContentModulePrefix))
             {
                 Logger.Fatal("Errors while loading content assemblies.");
                 return true;
@@ -335,13 +342,23 @@ namespace Robust.Server
             // otherwise the prototypes will be cleared
             var prototypeManager = IoCManager.Resolve<IPrototypeManager>();
             prototypeManager.Initialize();
-            prototypeManager.LoadDirectory(new ResourcePath(@"/Prototypes"));
+            prototypeManager.LoadDirectory(Options.PrototypeDirectory);
             prototypeManager.Resync();
 
             IoCManager.Resolve<IServerConsoleHost>().Initialize();
             _entityManager.Startup();
             IoCManager.Resolve<IEntityLookup>().Startup();
             _stateManager.Initialize();
+
+            // sometime after content init
+            {
+                var reg = _entityManager.ComponentFactory.GetRegistration<TransformComponent>();
+                if (!reg.NetID.HasValue)
+                    throw new InvalidOperationException("TransformComponent does not have a NetId.");
+
+                _stateManager.SetTransformNetId(reg.NetID.Value);
+            }
+
             _scriptHost.Initialize();
 
             _modLoader.BroadcastRunLevel(ModRunLevel.PostInit);
@@ -492,7 +509,6 @@ namespace Robust.Server
         }
 
         public bool ContentStart { get; set; }
-        public bool LoadConfigAndUserData { private get; set; } = true;
 
         public void OverrideMainLoop(IGameLoop gameLoop)
         {

@@ -1,14 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Prometheus;
-using Robust.Shared.IoC;
-using Robust.Shared.Log;
 using Robust.Shared.Map;
-using Robust.Shared.Maths;
-using Robust.Shared.Physics;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
@@ -24,7 +21,7 @@ namespace Robust.Shared.GameObjects
 
         [IoC.Dependency] protected readonly IPrototypeManager PrototypeManager = default!;
         [IoC.Dependency] protected readonly IEntitySystemManager EntitySystemManager = default!;
-        [IoC.Dependency] private readonly IComponentFactory ComponentFactory = default!;
+        [IoC.Dependency] protected readonly IComponentFactory ComponentFactory = default!;
         [IoC.Dependency] private readonly IComponentManager _componentManager = default!;
         [IoC.Dependency] private readonly IMapManager _mapManager = default!;
         [IoC.Dependency] private readonly IGameTiming _gameTiming = default!;
@@ -34,6 +31,8 @@ namespace Robust.Shared.GameObjects
 
         /// <inheritdoc />
         public GameTick CurrentTick => _gameTiming.CurTick;
+
+        IComponentFactory IEntityManager.ComponentFactory => ComponentFactory;
 
         /// <inheritdoc />
         public IComponentManager ComponentManager => _componentManager;
@@ -157,9 +156,8 @@ namespace Robust.Shared.GameObjects
         {
             var newEntity = CreateEntity(prototypeName);
 
-            if (TryGetEntity(coordinates.EntityId, out var entity))
+            if (coordinates.IsValid(this))
             {
-                newEntity.Transform.AttachParent(entity);
                 newEntity.Transform.Coordinates = coordinates;
             }
 
@@ -228,12 +226,7 @@ namespace Robust.Shared.GameObjects
             return false;
         }
 
-        [Obsolete("IEntityQuery is obsolete")]
-        public IEnumerable<IEntity> GetEntities(IEntityQuery query)
-        {
-            return query.Match(this);
-        }
-
+        /// <inheritdoc />
         public IEnumerable<IEntity> GetEntities()
         {
             // Need to do an iterator loop to avoid issues with concurrent access.
@@ -488,7 +481,7 @@ namespace Robust.Shared.GameObjects
             var uid = netMsg.EntityUid;
             if (compMsg.Directed)
             {
-                if (_componentManager.TryGetComponent(uid, netMsg.NetId, out var component))
+                if (_componentManager.TryGetComponent(uid, (ushort) netMsg.NetId, out var component))
                     component.HandleNetworkMessage(compMsg, compChannel, session);
             }
             else

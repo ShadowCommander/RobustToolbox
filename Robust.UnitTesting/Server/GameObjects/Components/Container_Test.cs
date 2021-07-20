@@ -269,7 +269,6 @@ namespace Robust.UnitTesting.Server.GameObjects.Components
             var containerMan = entity.GetComponent<IContainerManager>();
             var state = (ContainerManagerComponent.ContainerManagerComponentState)containerMan.GetComponentState(new Mock<ICommonSession>().Object);
 
-            Assert.That(state.NetID, Is.EqualTo(containerMan.NetID));
             Assert.That(state.ContainerSet.Count, Is.EqualTo(1));
             Assert.That(state.ContainerSet[0].Id, Is.EqualTo("dummy"));
             Assert.That(state.ContainerSet[0].OccludesLight, Is.True);
