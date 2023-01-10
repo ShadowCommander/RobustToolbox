@@ -11,6 +11,8 @@ namespace Robust.Client.UserInterface.Controls
     [Virtual]
     public class RadioOptions<T> : Control
     {
+        public const string StyleClassRadioButton = "radioButton";
+        
         private int internalIdCount = 0;
 
         private readonly List<RadioOptionButtonData<T>> _buttonDataList = new();
@@ -60,6 +62,7 @@ namespace Robust.Client.UserInterface.Controls
                 Text = label,
                 Group = _buttonGroup
             };
+            button.AddStyleClass(StyleClassRadioButton);
 
             button.OnPressed += ButtonOnPressed;
 
