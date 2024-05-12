@@ -53,6 +53,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             var entManager = server.Resolve<IEntityManager>();
             var mapManager = server.Resolve<IMapManager>();
+            var transformSystem = entManager.System<SharedTransformSystem>();
 
             entManager.System<SharedMapSystem>().CreateMap(out var mapId);
             var grid = mapManager.CreateGridEntity(mapId);
@@ -66,7 +67,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             var xform2 = entManager.GetComponent<TransformComponent>(ent2);
             Assert.That(xform2.WorldPosition, Is.EqualTo(new Vector2(0.5f, 100.5f)));
 
-            xform2.AttachToGridOrMap();
+            transformSystem.AttachToGridOrMap(ent2, xform2);
             Assert.That(xform2.LocalPosition, Is.EqualTo(Vector2.One * grid.Comp.TileSize / 2));
         }
     }

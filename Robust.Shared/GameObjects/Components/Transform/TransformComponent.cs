@@ -387,15 +387,6 @@ namespace Robust.Shared.GameObjects
         public bool PredictedLerp;
 
         /// <summary>
-        /// Detaches this entity from its parent.
-        /// </summary>
-        [Obsolete("Use the system's method instead.")]
-        public void AttachToGridOrMap()
-        {
-            _entMan.EntitySysManager.GetEntitySystem<SharedTransformSystem>().AttachToGridOrMap(Owner, this);
-        }
-
-        /// <summary>
         /// Sets another entity as the parent entity, maintaining world position.
         /// </summary>
         /// <param name="newParent"></param>
