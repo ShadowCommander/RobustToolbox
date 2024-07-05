@@ -8,7 +8,8 @@ namespace Robust.Client.ViewVariables.Editors
     {
         protected override Control MakeUI(object? value)
         {
-            var ts = (TimeSpan) value!;
+            if (value is not TimeSpan ts)
+                ts = TimeSpan.Zero;
             var lineEdit = new LineEdit
             {
                 Text = ts.ToString(),

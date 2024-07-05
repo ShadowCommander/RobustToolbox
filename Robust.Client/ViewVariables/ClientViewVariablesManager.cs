@@ -70,6 +70,12 @@ namespace Robust.Client.ViewVariables
                 return new VVPropEditorDummy();
             }
 
+            Type? underlyingType = Nullable.GetUnderlyingType(type);
+            if (underlyingType != null)
+            {
+                return new VVPropEditorNullable(PropertyFor(underlyingType));
+            }
+
             if (type == typeof(sbyte))
             {
                 return new VVPropEditorNumeric(NumberType.SByte);
