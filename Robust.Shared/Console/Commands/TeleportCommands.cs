@@ -96,6 +96,7 @@ public sealed class TeleportToCommand : LocalizedEntityCommands
         }
 
         var victims = new List<(EntityUid Entity, TransformComponent Transform)>();
+        var victimGrids = new List<(EntityUid Entity, TransformComponent Transform)>();
 
         if (args.Length == 1)
         {
@@ -120,7 +121,11 @@ public sealed class TeleportToCommand : LocalizedEntityCommands
                     continue;
 
                 if (_entities.HasComponent<MapGridComponent>(uid))
+                {
+                    victimGrids.Add((uid.Value, victimTransform));
                     continue;
+                }
+
                 victims.Add((uid.Value, victimTransform));
             }
         }
@@ -129,6 +134,25 @@ public sealed class TeleportToCommand : LocalizedEntityCommands
         {
             _transform.SetCoordinates(victim.Entity, targetCoords);
             _transform.AttachToGridOrMap(victim.Entity, victim.Transform);
+        }
+
+        var mapPos = _transform.GetMapCoordinates(targetUid.Value);
+        foreach (var grid in victimGrids)
+        {
+            if (_entities.TryGetComponent(grid.Entity, out PhysicsComponent? gridPhysics))
+            {
+                var offset = gridPhysics.LocalCenter;
+                var rotation = _transform.GetWorldRotation(grid.Entity);
+                offset = rotation.RotateVec(offset);
+
+                mapPos = mapPos.Offset(-offset);
+            }
+
+            shell.WriteLine(Loc.GetString("cmd-tpto-teleporting-grid-warning",
+                ("grid-name", grid.Entity),
+                ("grid-uid", grid.Entity.Id)));
+
+            _transform.SetMapCoordinates(grid.Entity, mapPos);
         }
     }
 

@@ -386,6 +386,7 @@ cmd-tpto-help = tpto <username|uid> [username|NetEntity]...
 cmd-tpto-destination-hint = destination (NetEntity or username)
 cmd-tpto-victim-hint = entity to teleport (NetEntity or username)
 cmd-tpto-parse-error = Cant resolve entity or player: {$str}
+cmd-tpto-teleporting-grid-warning = Teleporting grid: {$grid-name}, id: {$grid-uid}
 
 cmd-listplayers-desc = Lists all players currently connected.
 cmd-listplayers-help = listplayers
