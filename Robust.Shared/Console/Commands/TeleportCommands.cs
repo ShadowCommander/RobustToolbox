@@ -119,6 +119,8 @@ public sealed class TeleportToCommand : LocalizedEntityCommands
                 if (!TryGetTransformFromUidOrUsername(victim, shell, out var uid, out var victimTransform))
                     continue;
 
+                if (_entities.HasComponent<MapGridComponent>(uid))
+                    continue;
                 victims.Add((uid.Value, victimTransform));
             }
         }
